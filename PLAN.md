@@ -23,7 +23,13 @@
 - [x] `--dither` for triangular noise dithering
 - [x] `--bits` for configurable bit depth (16/24/32)
 - [x] Soft-knee compression (enabled by default)
-- [x] Tanh-based soft saturation with 6dB knee
+- [x] Cosine-based knee interpolation + soft saturation formula
+
+**Design Improvements (v0.1.3):**
+- [x] HumAnalyzer caching in Mapper (avoids FFT planner allocation per chop)
+- [x] Fixed soft clip algorithm (`output = input / sqrt(1 + excess²)`)
+- [x] NaN safety: `total_cmp()` for all f32 sorting
+- [x] Better dither RNG (content-based seed + LCG + xorshift)
 
 **Chopping Quality (v0.1.2):**
 - [x] Pre-emphasis filter (high-frequency boost)
@@ -40,10 +46,11 @@
 
 ### v0.1.3 (Current - 2026-04-10)
 - **Headless Mode**: `--no-tui` and `--num-chops` for scripting
-- **Dithering**: `--dither` with TPDF (Triangular Probability Density Function)
+- **Dithering**: `--dither` with TPDF (content-seeded RNG + LCG + xorshift)
 - **Bit Depth**: `--bits` for 16/24/32-bit output
-- **Soft-Knee Compression**: tanh-based saturation with 6dB knee, enabled by default
-- **Code Quality**: All 10 clippy warnings fixed
+- **Soft-Knee Compression**: cosine-based knee + soft saturation formula, enabled by default
+- **Design**: HumAnalyzer caching in Mapper, NaN-safe `total_cmp()` sorting
+- **Code Quality**: All 10 clippy warnings fixed, 44 tests passing
 
 ### v0.1.2 (Previous)
 - **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1])

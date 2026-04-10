@@ -135,6 +135,12 @@ Each chop is scored by integrated onset energy over its entire region (not just 
 
 Chops play back-to-back with tiny gaps (5ms) to prevent clicks. No time stretching - each chop plays at its natural length and speed.
 
+**Output Processing**:
+- Soft-knee compression prevents harsh digital clipping (enabled by default)
+- Uses cosine-based knee interpolation for smooth limiting
+- Final peak normalization ensures no samples exceed ±1.0
+- Optional triangular noise dithering for 16/24-bit output
+
 ## Library API Usage
 
 ```rust
@@ -196,8 +202,14 @@ let output = mapper.render_output(&mapped);
 - **`--dither`**: Enable triangular noise dithering for 16/24-bit output
 - **`--bits <BITS>`**: Output bit depth (16, 24, or 32; default: 32)
 - **Soft-knee compression**: Enabled by default to prevent harsh clipping
-- Uses tanh-based soft saturation with 6dB knee
+- Uses cosine-based knee interpolation + soft saturation formula
 - Preserves dynamics better than hard clipping
+
+#### Design Improvements
+- **HumAnalyzer caching**: Mapper caches HumAnalyzer instance (avoids FFT planner allocation per chop)
+- **Improved soft clip**: Fixed algorithm using `output = input / sqrt(1 + excess²)`
+- **NaN safety**: All f32 sorting uses `total_cmp()` instead of `partial_cmp()`
+- **Better dither RNG**: Content-based seed + LCG + xorshift for improved randomness
 
 #### Code Quality
 - Fixed all Clippy warnings (10 → 0)
@@ -211,23 +223,10 @@ let output = mapper.render_output(&mapped);
 #### Chopping Quality Improvements
 - **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1]) prevents bass masking of transients
 - **Multi-Band Onset Detection**: Full-band + high-flux (3kHz+) + mid-flux (300Hz–3kHz) for accurate detection across all content
-- **Median-Based Normalization**: Sliding MAD scaling replaces naive mean threshold — consistent detection across loud and quiet sections
-- **Peak Picking with Prominence**: 3-pass algorithm (local maxima → prominence → non-maximum suppression) — only meaningful transients selected
-- **Multi-Scale Energy Splitting**: Fallback tries 5 frame sizes (64/128/256/512/1024) — picks optimal split by energy contrast
-- **Integrated Strength Scoring**: 60% mean + 40% peak of onset energy over entire chop region — accurate mapper scores
-
-#### Configuration Changes
-- FFT window: 1024 → 2048 (better frequency resolution)
-- Min chop: 50ms → 30ms (catches faster transients)
-- Energy weight: 0.6 → 0.4 (more spectral-driven for musical content)
-
-#### Chopping Quality Improvements
-- **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1]) prevents bass masking of transients
-- **Multi-Band Onset Detection**: Full-band + high-flux (3kHz+) + mid-flux (300Hz–3kHz) for accurate detection across all content
-- **Median-Based Normalization**: Sliding MAD scaling replaces naive mean threshold — consistent detection across loud and quiet sections
-- **Peak Picking with Prominence**: 3-pass algorithm (local maxima → prominence → non-maximum suppression) — only meaningful transients selected
-- **Multi-Scale Energy Splitting**: Fallback tries 5 frame sizes (64/128/256/512/1024) — picks optimal split by energy contrast
-- **Integrated Strength Scoring**: 60% mean + 40% peak of onset energy over entire chop region — accurate mapper scores
+- **Median-Based Normalization**: Sliding MAD scaling replaces naive mean threshold
+- **Peak Picking with Prominence**: 3-pass algorithm for precise boundary placement
+- **Multi-Scale Energy Splitting**: Fallback tries 5 frame sizes (64/128/256/512/1024)
+- **Integrated Strength Scoring**: 60% mean + 40% peak of onset energy over chop region
 
 #### Configuration Changes
 - FFT window: 1024 → 2048 (better frequency resolution)
@@ -236,7 +235,7 @@ let output = mapper.render_output(&mapped);
 
 ---
 
-### v0.2.0
+### v0.2.0 (Previous)
 
 #### Bug Fixes
 - **Audio Recording Normalization**: i16/U16 samples now properly normalized to ±1.0

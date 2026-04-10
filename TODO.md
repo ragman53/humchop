@@ -11,6 +11,7 @@
 - [x] `load_audio()` - WAV/MP3/FLAC loading via symphonia
 - [x] `write_wav()` - WAV output via hound
 - [x] `write_wav_with_options()` - WAV with configurable options (v0.1.3)
+- [x] `apply_dither()` - TPDF dithering with content-seeded RNG (v0.1.3)
 - [x] `normalize()` - Peak normalization
 - [x] `resample()` - Sample rate conversion
 - [x] `to_mono()` - Channel to mono conversion
@@ -38,6 +39,7 @@
 - [x] Integrated strength scoring (60% mean + 40% peak)
 - [x] Boundary jitter for imperfect-feel
 - [x] Min/max chop length constraints
+- [x] NaN-safe `total_cmp()` sorting (v0.1.3)
 - [x] Unit tests
 
 ### ✅ mapper.rs
@@ -50,7 +52,9 @@
 - [x] `apply_velocity_gain()` - Velocity-based gain
 - [x] `process()` - Full mapping pipeline
 - [x] `render_output()` - Final audio rendering
-- [x] `soft_knee_compress()` - Tanh-based soft clipping (v0.1.3)
+- [x] `soft_knee_compress()` - Soft clipping with cosine knee (v0.1.3)
+- [x] HumAnalyzer caching for performance (v0.1.3)
+- [x] NaN-safe `total_cmp()` sorting (v0.1.3)
 - [x] Unit tests (44 total)
 
 ### ✅ recorder.rs
@@ -101,10 +105,10 @@
 
 ## Documentation ✅
 
-- [x] SPEC.md - Complete project specification (updated v0.3.0)
-- [x] README.md - Installation, usage, key features (updated v0.3.0)
-- [x] PLAN.md - Development roadmap (updated v0.3.0)
-- [x] TESTING.md - Manual test verification guide (updated v0.3.0)
+- [x] SPEC.md - Complete project specification (updated v0.1.3)
+- [x] README.md - Installation, usage, key features (updated v0.1.3)
+- [x] PLAN.md - Development roadmap (updated v0.1.3)
+- [x] TESTING.md - Manual test verification guide (updated v0.1.3)
 - [x] QWEN.md - Project context for AI assistant
 - [x] TODO.md - This file
 
@@ -112,11 +116,14 @@
 
 ## Quality Fixes Applied
 
-### v0.1.3 - Output Quality & Headless
-1. **Headless Mode** - `--no-tui` and `--num-chops` for scripting
-2. **Dithering** - TPDF triangular noise dithering for 16/24-bit
-3. **Bit Depth** - `--bits` for 16/24/32-bit output
-4. **Soft-Knee Compression** - Tanh-based with 6dB knee
+### v0.1.3 - Design & Output Quality
+1. **HumAnalyzer Caching** - Mapper caches HumAnalyzer (avoids FFT planner allocation per chop)
+2. **Soft Clip Fix** - Corrected formula: `output = input / sqrt(1 + excess²)`
+3. **NaN Safety** - All f32 sorting uses `total_cmp()` instead of `partial_cmp()`
+4. **Better Dither RNG** - Content-seeded + LCG + xorshift
+5. **Headless Mode** - `--no-tui` and `--num-chops` for scripting
+6. **Dithering** - TPDF triangular noise dithering for 16/24-bit
+7. **Bit Depth** - `--bits` for 16/24/32-bit output
 
 ### v0.1.2 - Chopping Quality
 1. **Pre-Emphasis Filter** - High-frequency boost prevents bass masking
