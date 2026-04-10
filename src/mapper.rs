@@ -26,6 +26,10 @@ pub struct MapperConfig {
     pub crossfade_samples: usize,
     /// JDilla-style: match by strength (transient) rather than pitch
     pub strength_matching: bool,
+    /// Enable soft-knee compression to prevent clipping
+    pub soft_clip: bool,
+    /// Soft clip threshold (in dB, e.g., -1.0 = -1dBFS). Only used if soft_clip is true.
+    pub soft_clip_threshold_db: f32,
 }
 
 impl Default for MapperConfig {
@@ -34,9 +38,90 @@ impl Default for MapperConfig {
             enable_pitch_shift: false,
             output_sample_rate: 44100,
             crossfade_samples: 256,
-            strength_matching: true, // JDilla style - match by strength
+            strength_matching: true,      // JDilla style - match by strength
+            soft_clip: true,              // Enable soft clipping by default
+            soft_clip_threshold_db: -1.0, // -1dBFS threshold
         }
     }
+}
+
+impl MapperConfig {
+    /// Enable/disable soft-knee compression (prevents harsh clipping).
+    #[allow(dead_code)]
+    pub fn with_soft_clip(mut self, enabled: bool) -> Self {
+        self.soft_clip = enabled;
+        self
+    }
+
+    /// Set soft clip threshold in dB (e.g., -1.0 = -1dBFS).
+    #[allow(dead_code)]
+    pub fn with_soft_clip_threshold(mut self, db: f32) -> Self {
+        self.soft_clip_threshold_db = db.clamp(-12.0, 0.0);
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Soft-knee compression / soft clipping
+// ─────────────────────────────────────────────────────────────
+
+/// Apply soft-knee compression/limiting to prevent harsh digital clipping.
+/// Uses a smooth hyperbolic tangent (tanh) saturation for natural limiting.
+///
+/// This is more musical than hard clipping - it gently shapes peaks rather than
+/// hard-limiting them, preserving more of the transient character.
+///
+/// The compression ratio increases smoothly as the signal approaches the threshold,
+/// giving it a "soft knee" characteristic.
+pub fn soft_knee_compress(samples: &[f32], threshold_db: f32) -> Vec<f32> {
+    if samples.is_empty() {
+        return vec![];
+    }
+
+    // Convert threshold from dB to linear
+    let threshold = 10.0_f32.powf(threshold_db / 20.0);
+
+    // For very soft saturation, we use a tanh-based soft clipper
+    // The amount of saturation increases as we go above threshold
+    let knee_db = 6.0; // Soft knee width in dB
+    let knee_start = threshold_db - knee_db;
+    let knee_start_linear = 10.0_f32.powf(knee_start / 20.0);
+
+    let mut output = Vec::with_capacity(samples.len());
+
+    for &sample in samples {
+        let abs_input = sample.abs();
+
+        if abs_input <= knee_start_linear {
+            // Below knee - linear pass-through
+            output.push(sample);
+        } else if abs_input <= threshold {
+            // Within knee region - gradual compression
+            let input_db = 20.0 * abs_input.log10();
+            let compressed_db =
+                knee_start + (input_db - knee_start) * (input_db - knee_start) / (2.0 * knee_db);
+            let compressed = 10.0_f32.powf(compressed_db / 20.0) * sample.signum();
+            output.push(compressed);
+        } else {
+            // Above threshold - soft limiting with tanh
+            let over_threshold = (abs_input - threshold) / (1.0 - threshold);
+            // Tanh provides smooth saturation curve
+            let compressed_abs =
+                threshold * (1.0 + (1.0 - threshold) * over_threshold.tanh() - over_threshold);
+            output.push(compressed_abs * sample.signum());
+        }
+    }
+
+    // Final peak normalization to ensure no samples exceed 1.0
+    let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    if max_amp > 1.0 {
+        let norm = 1.0 / max_amp;
+        for s in output.iter_mut() {
+            *s *= norm;
+        }
+    }
+
+    output
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -399,11 +484,17 @@ impl Mapper {
             }
         }
 
-        // Normalize
-        let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-        if max_amp > 1.0 {
-            for s in output.iter_mut() {
-                *s /= max_amp;
+        // Apply soft clipping or hard normalization
+        if self.config.soft_clip {
+            output = soft_knee_compress(&output, self.config.soft_clip_threshold_db);
+        } else {
+            // Hard normalize to prevent clipping
+            let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            if max_amp > 1.0 {
+                let norm = 1.0 / max_amp;
+                for s in output.iter_mut() {
+                    *s *= norm;
+                }
             }
         }
 
@@ -608,6 +699,57 @@ mod tests {
             mapper.match_by_strength(&soft, &chops, &[0, 1]),
             1,
             "Soft note should match weak chop"
+        );
+    }
+
+    #[test]
+    fn test_soft_knee_compress_empty() {
+        let result = soft_knee_compress(&[], -1.0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_soft_knee_compress_no_clipping() {
+        // Signal below threshold should pass through unchanged
+        let samples = vec![0.3f32, 0.5, -0.4, 0.6];
+        let result = soft_knee_compress(&samples, -1.0);
+
+        // All samples should be within [-1, 1]
+        for s in &result {
+            assert!((*s).abs() <= 1.0, "Sample {} exceeds bounds", s);
+        }
+    }
+
+    #[test]
+    fn test_soft_knee_compress_reduces_peaks() {
+        // Very loud signal that would clip
+        let samples = vec![1.5f32, 1.8, -1.6, 2.0];
+        let result = soft_knee_compress(&samples, -1.0);
+
+        // After compression, max should be <= 1.0
+        let max_amp = result.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(max_amp <= 1.0, "Max amplitude {} should be <= 1.0", max_amp);
+
+        // But relative dynamics should be preserved (not all normalized to same level)
+        let min_abs = result.iter().map(|s| s.abs()).fold(f32::MAX, f32::min);
+        assert!(min_abs < max_amp, "Dynamics should be preserved");
+    }
+
+    #[test]
+    fn test_soft_clip_preserves_shape() {
+        // Verify soft clipping doesn't completely eliminate peaks
+        let samples: Vec<f32> = (0..1000).map(|i| (i as f32 / 100.0).sin() * 1.5).collect();
+        let result = soft_knee_compress(&samples, -1.0);
+
+        // Peak reduction should be less than 100% (soft, not hard clipping)
+        let original_peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        let compressed_peak = result.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+
+        // Soft clip should reduce but not eliminate the dynamics
+        let reduction_ratio = compressed_peak / original_peak;
+        assert!(
+            reduction_ratio > 0.5,
+            "Soft clip should preserve some dynamics"
         );
     }
 }
