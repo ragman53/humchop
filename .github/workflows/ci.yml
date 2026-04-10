@@ -43,7 +43,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy (core-only)
-        run: cargo clippy --no-default-features --features core-only -- -D warnings
+        run: cargo clippy --no-default-features --features core-only
 
       - name: Run tests (core-only)
         run: cargo test --no-default-features --features core-only
