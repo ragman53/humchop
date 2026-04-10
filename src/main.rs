@@ -45,6 +45,16 @@ struct Args {
     /// Sample segment to use: start,end in seconds (e.g., 0,30 for first 30s)
     #[arg(long, value_name = "START,END")]
     segment: Option<String>,
+
+    /// Run in headless mode (no TUI) with demo notes.
+    /// Useful for scripting, batch processing, or quick testing.
+    #[arg(long)]
+    no_tui: bool,
+
+    /// Number of chops to create (for headless mode with --no-tui).
+    /// Defaults to 16 if not specified.
+    #[arg(long, value_name = "NUM", default_value = "16")]
+    num_chops: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -63,13 +73,25 @@ fn main() -> Result<()> {
 
     match args.input {
         Some(input_path) => {
-            run_interactive(
-                input_path.as_path(),
-                args.output.as_deref(),
-                args.pitch_shift,
-                args.pitch_matching,
-                args.segment.as_deref(),
-            )?;
+            if args.no_tui {
+                // Headless mode: process with demo notes, no TUI
+                run_headless(
+                    input_path.as_path(),
+                    args.output.as_deref(),
+                    args.pitch_shift,
+                    args.pitch_matching,
+                    args.segment.as_deref(),
+                    args.num_chops,
+                )?;
+            } else {
+                run_interactive(
+                    input_path.as_path(),
+                    args.output.as_deref(),
+                    args.pitch_shift,
+                    args.pitch_matching,
+                    args.segment.as_deref(),
+                )?;
+            }
         }
         None => {
             // Show help
@@ -79,6 +101,8 @@ fn main() -> Result<()> {
             println!("  -o, --output <file>    Output file path");
             println!("      --pitch-shift      Enable pitch shifting");
             println!("      --pitch-matching   Match by pitch instead of strength");
+            println!("      --no-tui           Run headless (no TUI, demo notes)");
+            println!("      --num-chops <N>    Number of chops (default: 16)");
             println!();
             println!("JDilla-style mode:");
             println!("  - Chops keep original length (classic hip-hop chop)");
@@ -87,8 +111,8 @@ fn main() -> Result<()> {
             println!();
             println!("Example:");
             println!("  humchop sample.wav");
-            println!("  humchop beat.mp3 -o my_chops.wav --segment 0,30");
-            println!("  humchop beat.mp3 --segment 60,120  # use 60-120s segment");
+            println!("  humchop beat.mp3 -o my_chops.wav");
+            println!("  humchop beat.mp3 --no-tui --num-chops 8  # headless");
         }
     }
 
@@ -499,6 +523,123 @@ fn run_interactive(
         (output.len()).to_string().yellow(),
         output.len() as f64 / sample_rate as f64
     );
+    println!();
+    println!("Done!");
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Headless mode (no TUI) for scripting and batch processing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run in headless mode with demo notes (no TUI).
+/// Useful for scripting, batch processing, or quick testing.
+fn run_headless(
+    input_path: &Path,
+    output_path: Option<&Path>,
+    enable_pitch_shift: bool,
+    pitch_matching: bool,
+    _segment: Option<&str>,
+    num_chops: Option<usize>,
+) -> Result<()> {
+    use std::time::Instant;
+
+    // Validate input file exists
+    if !input_path.exists() {
+        return Err(error::HumChopError::IoError(format!(
+            "Input file not found: {}",
+            input_path.display()
+        ))
+        .into());
+    }
+
+    println!("→ Loading: {}", input_path.display().to_string().white());
+
+    // Load the sample
+    let (samples, sample_rate) = audio_utils::load_audio(input_path)?;
+    let duration_secs = samples.len() as f64 / sample_rate as f64;
+    println!(
+        "  • {} samples, {:.2}s @ {} Hz",
+        samples.len().to_string().yellow(),
+        duration_secs,
+        sample_rate.to_string().yellow()
+    );
+
+    // Demo notes for headless mode
+    let demo_notes = vec![
+        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
+        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
+        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
+        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
+    ];
+    println!("  • Demo notes: {:?}", demo_notes.iter().map(|n| n.to_note_name()).collect::<Vec<_>>());
+
+    // Determine chop count
+    let target_num_chops = num_chops.unwrap_or(16);
+    println!("  • Target chops: {}", target_num_chops);
+
+    // Process
+    let start = Instant::now();
+
+    // Trim sample to 10s if longer
+    let max_duration = 10.0;
+    let max_samples = (max_duration * sample_rate as f64) as usize;
+    let sample_to_chop = if samples.len() > max_samples {
+        println!(
+            "  • Trimming: {:.1}s → {:.1}s",
+            samples.len() as f64 / sample_rate as f64,
+            max_duration
+        );
+        &samples[..max_samples]
+    } else {
+        &samples[..]
+    };
+
+    println!();
+    println!("→ Processing...");
+
+    let chopper = sample_chopper::SampleChopper::new(sample_rate);
+    let chops = chopper
+        .chop(sample_to_chop, target_num_chops)
+        .map_err(|e| anyhow::anyhow!("Failed to chop: {}", e))?;
+    println!("  • Found {} natural chop points", chops.len());
+
+    let mapper = mapper::Mapper::with_config(
+        sample_rate,
+        mapper::MapperConfig {
+            enable_pitch_shift,
+            strength_matching: !pitch_matching,
+            ..Default::default()
+        },
+    );
+
+    let mapped_chops = mapper
+        .process(&demo_notes, &chops)
+        .map_err(|e| anyhow::anyhow!("Failed to map: {}", e))?;
+
+    let output = mapper.render_output(&mapped_chops);
+
+    // Generate output filename
+    let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+    });
+
+    println!();
+    println!("→ Writing: {}", out_path.display().to_string().white());
+
+    audio_utils::write_wav(&out_path, &output, sample_rate)?;
+
+    let elapsed = start.elapsed();
+    println!();
+    println!(
+        "✓ Output saved to: {} ({} samples, {:.2}s)",
+        out_path.display().to_string().yellow(),
+        (output.len()).to_string().yellow(),
+        output.len() as f64 / sample_rate as f64
+    );
+    println!("  • Processed in {:.2}s", elapsed.as_secs_f64());
     println!();
     println!("Done!");
 
