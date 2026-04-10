@@ -13,6 +13,9 @@ mod tui;
 #[cfg(feature = "audio-io")]
 mod recorder;
 
+#[cfg(feature = "audio-io")]
+mod player;
+
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
@@ -249,6 +252,7 @@ fn run_interactive(
     enable_pitch_shift: bool,
     chop_mode_str: &str,
 ) -> Result<()> {
+    use crate::player::Player;
     use crate::recorder::Recorder;
     use std::io::{self, Write};
     use std::time::{Duration, Instant};
@@ -297,8 +301,51 @@ fn run_interactive(
         .yellow()
     );
 
-    // Initialize recorder
+    // Initialize recorder and player
     let mut recorder = Recorder::new();
+    let mut player = Player::new();
+
+    println!();
+    println!("{} {}", "→".cyan(), "🎧 Audio Preview".bold());
+    println!(
+        "{}",
+        "Press 'p' to preview the loaded sample, 's' to stop playback".dimmed()
+    );
+    
+    // Interactive loop with preview option
+    loop {
+        print!("\nType 'p' to preview sample, 'r' to record, or 'q' to quit: ");
+        io::stdout().flush()?;
+        
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim().to_lowercase();
+        
+        match choice.as_str() {
+            "p" => {
+                if !player.is_playing() {
+                    println!("{} Playing sample preview (5 seconds)...", "🎵".cyan());
+                    if let Err(e) = player.preview(&samples, sample_rate, 5.0) {
+                        println!("{} Preview failed: {}", "✗".red(), e);
+                    }
+                } else {
+                    println!("{} Already playing...", "🔊".yellow());
+                }
+            }
+            "s" => {
+                player.stop();
+                println!("{} Stopped playback", "■".yellow());
+            }
+            "r" => break, // Start recording
+            "q" => {
+                println!("Exiting...");
+                return Ok(());
+            }
+            _ => {
+                println!("Unknown command. Use 'p' (preview), 'r' (record), or 'q' (quit)");
+            }
+        }
+    }
 
     println!();
     println!("{} {}", "→".cyan(), "🎤 Microphone Recording Ready".bold());
@@ -551,10 +598,47 @@ fn run_interactive(
     // Show playback hint
     println!();
     println!(
-        "  {} Play with: ffplay {}",
-        "•".dimmed(),
-        out_path.display()
+        "{} {}",
+        "→".cyan(),
+        "🎧 Output Preview".bold()
     );
+    println!(
+        "{}",
+        "Type 'p' to preview the output, 'q' to quit".dimmed()
+    );
+    
+    // Offer to play the output
+    loop {
+        print!("\nType 'p' to preview output, or Enter to quit: ");
+        io::stdout().flush()?;
+        
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim().to_lowercase();
+        
+        match choice.as_str() {
+            "p" => {
+                if !player.is_playing() {
+                    println!("{} Playing output preview (5 seconds)...", "🎵".cyan());
+                    if let Err(e) = player.preview(&output, sample_rate, 5.0) {
+                        println!("{} Preview failed: {}", "✗".red(), e);
+                    }
+                    // Wait a bit then stop
+                    std::thread::sleep(std::time::Duration::from_secs(6));
+                    player.stop();
+                } else {
+                    player.stop();
+                }
+            }
+            "" | "q" => break,
+            _ => {
+                println!("Unknown command.");
+            }
+        }
+    }
+
+    println!();
+    println!("Done!");
 
     Ok(())
 }
