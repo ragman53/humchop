@@ -1,7 +1,7 @@
 //! HumChop - Hum-to-chop sampling tool
 //!
 //! Chop audio samples by humming melodies.
-//! Record a hum → Analyze pitch → Auto-chop your samples.
+//! Record a hum → Analyze pitch → Auto-chop your samples using JDilla-style processing.
 
 mod audio_utils;
 mod error;
@@ -34,23 +34,13 @@ struct Args {
     #[arg(short, long, value_name = "OUTPUT")]
     output: Option<PathBuf>,
 
-    /// Enable TUI mode (interactive)
-    #[arg(short, long, default_value_t = true)]
-    tui: bool,
-
     /// Enable pitch shifting (slower but more accurate)
     #[arg(long)]
     pitch_shift: bool,
 
-    /// Chop mode: 'equal' or 'onset'
-    #[arg(short, long, value_name = "MODE", default_value = "equal")]
-    chop_mode: String,
-
-    /// Mapping style: 'timestretch' or 'jdilla'
-    /// - timestretch: Chops stretched to match note duration (sounds like pitch-shifted playback)
-    /// - jdilla: Chops keep original length, play at note positions (classic hip-hop chop)
-    #[arg(long, value_name = "STYLE", default_value = "jdilla")]
-    style: String,
+    /// Match notes to chops by pitch instead of strength
+    #[arg(long)]
+    pitch_matching: bool,
 }
 
 fn main() -> Result<()> {
@@ -62,20 +52,14 @@ fn main() -> Result<()> {
     // Display welcome message
     println!(
         "{}",
-        "HumChop v0.1.0 - Hum-to-chop sampling tool".green().bold()
+        "HumChop v0.2.0 - Hum-to-chop sampling tool".green().bold()
     );
     println!("{}", "━".repeat(40).dimmed());
     println!();
 
     match args.input {
         Some(input_path) => {
-            run_interactive(
-                &input_path,
-                args.output.as_ref(),
-                args.pitch_shift,
-                &args.chop_mode,
-                &args.style,
-            )?;
+            run_interactive(&input_path, args.output.as_ref(), args.pitch_shift, args.pitch_matching)?;
         }
         None => {
             // Show help
@@ -83,17 +67,17 @@ fn main() -> Result<()> {
             println!();
             println!("Options:");
             println!("  -o, --output <file>    Output file path");
-            println!("  -m, --chop-mode <mode> Chop mode: 'equal' or 'onset'");
             println!("      --pitch-shift      Enable pitch shifting");
-            println!("  -s, --style <style>   Mapping style: 'jdilla' or 'timestretch'");
+            println!("      --pitch-matching   Match by pitch instead of strength");
             println!();
-            println!("Styles:");
-            println!("  jdilla       Chops keep original length (classic hip-hop chop)");
-            println!("  timestretch  Chops stretched to match note duration");
+            println!("JDilla-style mode:");
+            println!("  - Chops keep original length (classic hip-hop chop)");
+            println!("  - Notes determine WHICH chop plays, not how long");
+            println!("  - Strength matching: loud notes → strong transients");
             println!();
             println!("Example:");
             println!("  humchop sample.wav");
-            println!("  humchop beat.mp3 -m onset -o my_chops.wav");
+            println!("  humchop beat.mp3 -o my_chops.wav --pitch-shift");
         }
     }
 
@@ -103,14 +87,13 @@ fn main() -> Result<()> {
 #[cfg(feature = "audio-io")]
 mod recorder_integration {
     use super::*;
-    use crate::recorder::{list_input_devices, Recorder, MAX_RECORDING_DURATION_SECS};
+    use crate::recorder::{list_input_devices, Recorder};
 
     /// Run interactive mode with microphone recording support.
     pub fn run_with_recording(
         input_path: &PathBuf,
         output_path: Option<&PathBuf>,
         enable_pitch_shift: bool,
-        chop_mode_str: &str,
     ) -> Result<()> {
         // Validate input file exists
         if !input_path.exists() {
@@ -139,22 +122,7 @@ mod recorder_integration {
             duration_secs,
             sample_rate.to_string().yellow()
         );
-
-        // Parse chop mode
-        let chop_mode = match chop_mode_str.to_lowercase().as_str() {
-            "onset" => sample_chopper::ChopMode::Onset,
-            _ => sample_chopper::ChopMode::Equal,
-        };
-
-        println!(
-            "  {} Chop mode: {}",
-            "•".dimmed(),
-            match chop_mode {
-                sample_chopper::ChopMode::Equal => "Equal Division",
-                sample_chopper::ChopMode::Onset => "Onset Detection",
-            }
-            .yellow()
-        );
+        println!("  {} JDilla-style chop mode (strength-based matching)", "•".dimmed());
 
         // List available input devices
         let devices = list_input_devices();
@@ -200,7 +168,7 @@ mod recorder_integration {
         // Process
         let chopper = sample_chopper::SampleChopper::new(sample_rate);
         let chops = chopper
-            .chop(&samples, demo_notes.len(), chop_mode)
+            .chop(&samples, demo_notes.len())
             .map_err(|e| anyhow::anyhow!("Failed to chop: {}", e))?;
 
         let mut mapper_config = mapper::MapperConfig::default();
@@ -262,8 +230,7 @@ fn run_interactive(
     input_path: &PathBuf,
     output_path: Option<&PathBuf>,
     enable_pitch_shift: bool,
-    chop_mode_str: &str,
-    style_str: &str,
+    pitch_matching: bool,
 ) -> Result<()> {
     use crate::player::Player;
     use crate::recorder::Recorder;
@@ -297,33 +264,19 @@ fn run_interactive(
         duration_secs,
         sample_rate.to_string().yellow()
     );
-
-    // Parse chop mode
-    let chop_mode = match chop_mode_str.to_lowercase().as_str() {
-        "onset" => sample_chopper::ChopMode::Onset,
-        _ => sample_chopper::ChopMode::Equal,
-    };
-
-    // Parse mapping style
-    let mapping_style = match style_str.to_lowercase().as_str() {
-        "jdilla" => {
-            println!("  {} Mapping style: JDilla (chops keep original length)", "•".dimmed());
-            mapper::MappingStyle::Jdilla
-        }
-        _ => {
-            println!("  {} Mapping style: TimeStretch (chops match note duration)", "•".dimmed());
-            mapper::MappingStyle::TimeStretch
-        }
-    };
-
     println!(
-        "  {} Chop mode: {}",
+        "  {} JDilla-style: {}",
         "•".dimmed(),
-        match chop_mode {
-            sample_chopper::ChopMode::Equal => "Equal Division",
-            sample_chopper::ChopMode::Onset => "Onset Detection",
+        if pitch_matching { "pitch matching" } else { "strength matching" }
+    );
+    println!(
+        "  {} {}",
+        "•".dimmed(),
+        if enable_pitch_shift {
+            "pitch shifting ENABLED"
+        } else {
+            "pitch shifting disabled"
         }
-        .yellow()
     );
 
     // Initialize recorder and player
@@ -336,16 +289,16 @@ fn run_interactive(
         "{}",
         "Press 'p' to preview the loaded sample, 's' to stop playback".dimmed()
     );
-    
+
     // Interactive loop with preview option
     loop {
         print!("\nType 'p' to preview sample, 'r' to record, or 'q' to quit: ");
         io::stdout().flush()?;
-        
+
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
         let choice = choice.trim().to_lowercase();
-        
+
         match choice.as_str() {
             "p" => {
                 if !player.is_playing() {
@@ -422,7 +375,7 @@ fn run_interactive(
             .enable_all()
             .build()
             .expect("Failed to create tokio runtime");
-        
+
         rt.block_on(async {
             let mut receiver = receiver;
             loop {
@@ -493,7 +446,7 @@ fn run_interactive(
     // Stop recording and cleanup
     recorder.stop_recording();
     drop(audio_tx); // Signal end to forward thread
-    
+
     // Drain any remaining audio from the channel
     loop {
         match audio_rx.recv_timeout(Duration::from_millis(10)) {
@@ -514,7 +467,7 @@ fn run_interactive(
             break;
         }
     }
-    
+
     forward_handle.join().ok();
 
     let recording_duration = recording_start.elapsed().as_secs_f64();
@@ -583,12 +536,12 @@ fn run_interactive(
 
     let chopper = sample_chopper::SampleChopper::new(sample_rate);
     let chops = chopper
-        .chop(&samples, notes.len(), chop_mode)
+        .chop(&samples, notes.len())
         .map_err(|e| anyhow::anyhow!("Failed to chop: {}", e))?;
 
     let mut mapper_config = mapper::MapperConfig::default();
     mapper_config.enable_pitch_shift = enable_pitch_shift;
-    mapper_config.mapping_style = mapping_style;
+    mapper_config.strength_matching = !pitch_matching;
     let mapper = mapper::Mapper::with_config(sample_rate, mapper_config);
 
     let mapped_chops = mapper
@@ -628,25 +581,21 @@ fn run_interactive(
 
     // Show playback hint
     println!();
-    println!(
-        "{} {}",
-        "→".cyan(),
-        "🎧 Output Preview".bold()
-    );
+    println!("{} {}", "→".cyan(), "🎧 Output Preview".bold());
     println!(
         "{}",
         "Type 'p' to preview the output, 'q' to quit".dimmed()
     );
-    
+
     // Offer to play the output
     loop {
         print!("\nType 'p' to preview output, or Enter to quit: ");
         io::stdout().flush()?;
-        
+
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
         let choice = choice.trim().to_lowercase();
-        
+
         match choice.as_str() {
             "p" => {
                 if !player.is_playing() {
@@ -679,8 +628,7 @@ fn run_interactive(
     input_path: &PathBuf,
     output_path: Option<&PathBuf>,
     enable_pitch_shift: bool,
-    chop_mode_str: &str,
-    _style_str: &str,
+    pitch_matching: bool,
 ) -> Result<()> {
     // Validate input file exists
     if !input_path.exists() {
@@ -709,33 +657,10 @@ fn run_interactive(
         duration_secs,
         sample_rate.to_string().yellow()
     );
-
-    // Parse chop mode
-    let chop_mode = match chop_mode_str.to_lowercase().as_str() {
-        "onset" => sample_chopper::ChopMode::Onset,
-        _ => sample_chopper::ChopMode::Equal,
-    };
-
-    // Parse mapping style
-    let mapping_style = match _style_str.to_lowercase().as_str() {
-        "jdilla" => {
-            println!("  {} Mapping style: JDilla (chops keep original length)", "•".dimmed());
-            mapper::MappingStyle::Jdilla
-        }
-        _ => {
-            println!("  {} Mapping style: TimeStretch (chops match note duration)", "•".dimmed());
-            mapper::MappingStyle::TimeStretch
-        }
-    };
-
     println!(
-        "  {} Chop mode: {}",
+        "  {} JDilla-style: {}",
         "•".dimmed(),
-        match chop_mode {
-            sample_chopper::ChopMode::Equal => "Equal Division",
-            sample_chopper::ChopMode::Onset => "Onset Detection",
-        }
-        .yellow()
+        if pitch_matching { "pitch matching" } else { "strength matching" }
     );
 
     println!();
@@ -770,12 +695,12 @@ fn run_interactive(
     // Process
     let chopper = sample_chopper::SampleChopper::new(sample_rate);
     let chops = chopper
-        .chop(&samples, demo_notes.len(), chop_mode)
+        .chop(&samples, demo_notes.len())
         .map_err(|e| anyhow::anyhow!("Failed to chop: {}", e))?;
 
     let mut mapper_config = mapper::MapperConfig::default();
     mapper_config.enable_pitch_shift = enable_pitch_shift;
-    mapper_config.mapping_style = mapping_style;
+    mapper_config.strength_matching = !pitch_matching;
     let mapper = mapper::Mapper::with_config(sample_rate, mapper_config);
 
     let mapped_chops = mapper

@@ -1,64 +1,46 @@
-//! Mapper - Map notes to chops with time stretching and pitch shifting.
+//! Mapper - Map notes to chops with JDilla-style processing.
 //!
 //! This module handles:
 //! - Matching notes to chops by PITCH (not time)
-//! - Time stretching to match note durations
-//! - Pitch shifting to match note pitches
-//! - JDilla-style mode: chops keep original length, gaps between notes
+//! - Strength-based matching for JDilla mode
+//! - Velocity-based gain adjustment
+//! - JDilla-style: chops keep original length, play at note positions
 
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
-use crate::sample_chopper::{Chop, ChopMode, SampleChopper};
+use crate::sample_chopper::{Chop, SampleChopper};
 
-/// Chopping/mapping style.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MappingStyle {
-    /// Original: time stretch each chop to match note duration.
-    /// Sounds like pitch-shifted playback.
-    TimeStretch,
-    /// JDilla-style: chops keep original length, play at note onset with gaps.
-    /// Notes determine WHICH chop plays (by pitch), not how long it plays.
-    Jdilla,
-}
-
-impl Default for MappingStyle {
-    fn default() -> Self {
-        MappingStyle::TimeStretch
-    }
-}
+// ─────────────────────────────────────────────────────────────
+// Configuration
+// ─────────────────────────────────────────────────────────────
 
 /// Configuration for the mapper.
 #[derive(Debug, Clone)]
 pub struct MapperConfig {
     /// Enable pitch shifting (can be computationally expensive)
     pub enable_pitch_shift: bool,
-    /// Enable time stretching (in TimeStretch mode)
-    pub enable_time_stretch: bool,
-    /// Mapping style: TimeStretch or Jdilla
-    pub mapping_style: MappingStyle,
     /// Output sample rate
     pub output_sample_rate: u32,
-    /// Maximum time stretch ratio (1.0 = no stretch, 2.0 = double length)
-    pub max_stretch_ratio: f64,
-    /// Minimum time stretch ratio  
-    pub min_stretch_ratio: f64,
-    /// Crossfade length in samples (JDilla mode)
+    /// Crossfade length in samples for smooth transitions
     pub crossfade_samples: usize,
+    /// JDilla-style: match by strength (transient) rather than pitch
+    pub strength_matching: bool,
 }
 
 impl Default for MapperConfig {
     fn default() -> Self {
         Self {
             enable_pitch_shift: false,
-            enable_time_stretch: true,
-            mapping_style: MappingStyle::TimeStretch,
             output_sample_rate: 44100,
-            max_stretch_ratio: 4.0,
-            min_stretch_ratio: 0.25,
             crossfade_samples: 256,
+            strength_matching: true, // JDilla style - match by strength
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────
+// MappedChop
+// ─────────────────────────────────────────────────────────────
 
 /// A mapped chop with timing and processing applied.
 #[derive(Debug, Clone)]
@@ -97,7 +79,10 @@ impl MappedChop {
     }
 }
 
-/// The mapper that handles note-to-chop assignment.
+// ─────────────────────────────────────────────────────────────
+// Mapper
+// ─────────────────────────────────────────────────────────────
+
 pub struct Mapper {
     config: MapperConfig,
     sample_rate: u32,
@@ -126,21 +111,17 @@ impl Mapper {
         self
     }
 
-    /// Enable or disable time stretching.
-    pub fn with_time_stretch(mut self, enabled: bool) -> Self {
-        self.config.enable_time_stretch = enabled;
-        self
-    }
-
-    /// Set mapping style (TimeStretch or Jdilla).
-    pub fn with_style(mut self, style: MappingStyle) -> Self {
-        self.config.mapping_style = style;
+    /// Enable/disable strength matching (JDilla style).
+    /// When true, matches note velocity to chop strength.
+    /// When false, matches by pitch proximity.
+    pub fn with_strength_matching(mut self, enabled: bool) -> Self {
+        self.config.strength_matching = enabled;
         self
     }
 
     /// Estimate the dominant pitch of a chop using HumAnalyzer.
     /// Returns 0.0 if no clear pitch detected (e.g., percussion).
-    fn estimate_chop_pitch(&self, chop: &Chop) -> f32 {
+    pub fn estimate_chop_pitch(&self, chop: &Chop) -> f32 {
         let analyzer = HumAnalyzer::new(self.sample_rate);
         let pitches = analyzer.detect_pitch(&chop.samples);
 
@@ -156,102 +137,80 @@ impl Mapper {
         sorted[sorted.len() / 2]
     }
 
-    /// Calculate pitch distance in semitones.
-    fn pitch_distance_semitones(&self, pitch1: f32, pitch2: f32) -> f32 {
-        if pitch1 <= 0.0 || pitch2 <= 0.0 {
-            return f32::MAX; // Max distance for invalid pitches
-        }
-        12.0 * ((pitch1 / pitch2).log2().abs())
+    /// Match a note to a chop by strength (JDilla mode).
+    /// High-velocity note → strong transient chop; soft note → quiet tail chop.
+    pub fn match_by_strength(&self, note: &Note, chops: &[Chop], pool: &[usize]) -> usize {
+        pool.iter()
+            .copied()
+            .min_by(|&a, &b| {
+                let da = (chops[a].strength - note.velocity).abs();
+                let db = (chops[b].strength - note.velocity).abs();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(pool[0])
     }
 
-    /// Find the chop whose estimated pitch is closest to the note's pitch.
-    /// Falls back to sequential matching if pitches unavailable.
-    pub fn find_best_chop(&self, note: &Note, chops: &[Chop], used: &[bool]) -> Option<usize> {
-        if chops.is_empty() {
-            return None;
+    /// Match a note to a chop by pitch proximity.
+    fn match_by_pitch(
+        &self,
+        note: &Note,
+        chops: &[Chop],
+        pitches: &[f32],
+        pool: &[usize],
+    ) -> usize {
+        let pitched: Vec<usize> = pool.iter().copied().filter(|&i| pitches[i] > 0.0).collect();
+
+        if note.pitch_hz > 0.0 && !pitched.is_empty() {
+            pitched
+                .iter()
+                .copied()
+                .min_by(|&a, &b| {
+                    let da = (pitches[a] / note.pitch_hz).log2().abs();
+                    let db = (pitches[b] / note.pitch_hz).log2().abs();
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(pool[0])
+        } else {
+            pool[0]
         }
-
-        // Pre-compute pitches for all chops
-        let chop_pitches: Vec<f32> = chops.iter().map(|c| self.estimate_chop_pitch(c)).collect();
-
-        // Find unused chops
-        let candidates: Vec<usize> = (0..chops.len()).filter(|&i| !used[i]).collect();
-
-        if candidates.is_empty() {
-            // All chops used; reset and start from beginning
-            return Some(chops.len() % chops.len());
-        }
-
-        // If note has a valid pitch, match by pitch
-        if note.pitch_hz > 0.0 {
-            // Find chop with closest pitch
-            let best = candidates.iter().min_by(|&&a, &&b| {
-                let dist_a = self.pitch_distance_semitones(note.pitch_hz, chop_pitches[a]);
-                let dist_b = self.pitch_distance_semitones(note.pitch_hz, chop_pitches[b]);
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            if let Some(&idx) = best {
-                let dist = self.pitch_distance_semitones(note.pitch_hz, chop_pitches[idx]);
-                // If pitch distance is reasonable (< 12 semitones), use it
-                // Otherwise fall back to sequential
-                if dist < 12.0 || chop_pitches[idx] == 0.0 {
-                    return Some(idx);
-                }
-            }
-        }
-
-        // Fallback: use first available (sequential)
-        Some(candidates[0])
     }
 
-    /// Map notes to chops based on pitch matching.
+    /// Map notes to chops based on strength (JDilla) or pitch matching.
     /// Each chop is used once, then reused if more notes than chops.
     pub fn map_notes_to_chops(&self, notes: &[Note], chops: &[Chop]) -> Vec<usize> {
         if notes.is_empty() || chops.is_empty() {
             return vec![];
         }
 
+        // Pre-compute all chop pitches once (avoid redundant analysis)
+        let chop_pitches: Vec<f32> = chops.iter().map(|c| self.estimate_chop_pitch(c)).collect();
+
         let mut used = vec![false; chops.len()];
         let mut mappings: Vec<usize> = Vec::with_capacity(notes.len());
 
         for note in notes {
-            // Find first unused chop (already pitch-matched in find_best_chop)
-            if let Some(chop_idx) = self.find_best_chop(note, chops, &used) {
-                used[chop_idx] = true;
-                mappings.push(chop_idx);
-            }
+            // Build candidate list from unused chops
+            let pool: Vec<usize> = (0..chops.len()).filter(|&i| !used[i]).collect();
+
+            let pool = if pool.is_empty() {
+                // All chops used; reset and start over
+                used = vec![false; chops.len()];
+                (0..chops.len()).collect::<Vec<_>>()
+            } else {
+                pool
+            };
+
+            let chosen = if self.config.strength_matching {
+                self.match_by_strength(note, chops, &pool)
+            } else {
+                self.match_by_pitch(note, chops, &chop_pitches, &pool)
+            };
+
+            used[chosen] = true;
+            mappings.push(chosen);
         }
 
         mappings
-    }
-
-    /// Apply time stretch to match target duration.
-    /// ratio > 1.0 = longer (slower), ratio < 1.0 = shorter (faster)
-    pub fn apply_time_stretch(&self, chop: &Chop, target_duration_secs: f64) -> Vec<f32> {
-        let current_duration = chop.duration;
-
-        if !self.config.enable_time_stretch
-            || (current_duration - target_duration_secs).abs() < 0.005
-            || current_duration <= 0.0
-            || target_duration_secs <= 0.0
-        {
-            return chop.samples.clone();
-        }
-
-        // Correct ratio: target / current
-        let ratio = target_duration_secs / current_duration;
-        let ratio = ratio.clamp(self.config.min_stretch_ratio, self.config.max_stretch_ratio);
-
-        let target_samples = (chop.samples.len() as f64 * ratio).round() as usize;
-
-        if target_samples == 0 || target_samples == chop.samples.len() {
-            return chop.samples.clone();
-        }
-
-        self.linear_resample(&chop.samples, target_samples)
     }
 
     /// Simple linear interpolation resampling.
@@ -312,48 +271,11 @@ impl Mapper {
         }
     }
 
-    /// Apply crossfade between two sample buffers.
-    fn crossfade(&self, buf1: &[f32], buf2: &[f32], fade_len: usize) -> Vec<f32> {
-        let fade_len = fade_len.min(buf1.len()).min(buf2.len());
-        if fade_len == 0 {
-            return buf1.to_vec();
-        }
-
-        let mut result = Vec::with_capacity(buf1.len() + buf2.len() - fade_len);
-
-        // First buffer (without tail)
-        result.extend_from_slice(&buf1[..buf1.len() - fade_len]);
-
-        // Crossfaded overlap
-        for i in 0..fade_len {
-            let t = i as f32 / fade_len as f32;
-            let s1 = buf1[buf1.len() - fade_len + i];
-            let s2 = buf2[i];
-            result.push(s1 * (1.0 - t) + s2 * t);
-        }
-
-        // Second buffer (without head)
-        result.extend_from_slice(&buf2[fade_len..]);
-
-        result
-    }
-
     /// Process a single note-to-chop mapping.
+    /// In JDilla mode: chops keep their original length, velocity is applied.
     pub fn process_mapping(&self, note: &Note, chop: &Chop, output_onset: f64) -> MappedChop {
-        let mut samples = match self.config.mapping_style {
-            MappingStyle::TimeStretch => {
-                // Original behavior: stretch to match note duration
-                if self.config.enable_time_stretch {
-                    self.apply_time_stretch(chop, note.duration_sec)
-                } else {
-                    chop.samples.clone()
-                }
-            }
-            MappingStyle::Jdilla => {
-                // JDilla style: chops keep original length, apply velocity only
-                chop.samples.clone()
-            }
-        };
+        // JDilla style: chops keep original length (no time stretch)
+        let mut samples = chop.samples.clone();
 
         // Pitch shift if enabled
         if self.config.enable_pitch_shift {
@@ -400,20 +322,9 @@ impl Mapper {
 
             let mapped = self.process_mapping(note, chop, current_onset);
 
-            // In JDilla mode, don't advance onset to next note position
-            // Just place chops back-to-back (or with small gaps)
-            match self.config.mapping_style {
-                MappingStyle::TimeStretch => {
-                    // Advance to next note's onset
-                    current_onset = note.onset_sec + mapped.output_duration;
-                }
-                MappingStyle::Jdilla => {
-                    // JDilla: chops at their natural positions OR sequential with small gaps
-                    // For now, sequential with tiny gap to prevent clicks
-                    let gap = 0.01; // 10ms gap
-                    current_onset += mapped.output_duration + gap;
-                }
-            }
+            // JDilla mode: place chops back-to-back with small gaps to prevent clicks
+            let gap = 0.005; // 5ms gap
+            current_onset += mapped.output_duration + gap;
 
             mapped_chops.push(mapped);
         }
@@ -465,10 +376,9 @@ impl Mapper {
         sample: &[f32],
         notes: &[Note],
         num_chops: usize,
-        chop_mode: ChopMode,
     ) -> Result<Vec<f32>, HumChopError> {
         let chopper = SampleChopper::new(self.sample_rate);
-        let chops = chopper.chop(sample, num_chops, chop_mode)?;
+        let chops = chopper.chop(sample, num_chops)?;
         let mapped_chops = self.process(notes, &chops)?;
         Ok(self.render_output(&mapped_chops))
     }
@@ -501,7 +411,6 @@ pub fn simple_resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sample_chopper::SampleChopper;
 
     fn create_test_sample(sample_rate: u32, duration_secs: f32) -> Vec<f32> {
         let num_samples = (sample_rate as f32 * duration_secs) as usize;
@@ -535,12 +444,10 @@ mod tests {
     fn test_mapper_with_options() {
         let mapper = Mapper::new(44100)
             .with_pitch_shift(true)
-            .with_time_stretch(false)
-            .with_style(MappingStyle::Jdilla);
+            .with_strength_matching(true);
 
         assert!(mapper.config.enable_pitch_shift);
-        assert!(!mapper.config.enable_time_stretch);
-        assert_eq!(mapper.config.mapping_style, MappingStyle::Jdilla);
+        assert!(mapper.config.strength_matching);
     }
 
     #[test]
@@ -548,7 +455,7 @@ mod tests {
         let mapper = Mapper::new(44100);
         let chopper = SampleChopper::new(44100);
         let sample = create_test_sample(44100, 1.0);
-        let chops = chopper.chop(&sample, 4, ChopMode::Equal).unwrap();
+        let chops = chopper.chop(&sample, 4).unwrap();
         let notes = create_test_notes(4);
         let mappings = mapper.map_notes_to_chops(&notes, &chops);
         assert_eq!(mappings.len(), notes.len());
@@ -571,29 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn test_time_stretch_longer() {
-        let mapper = Mapper::new(44100);
-        let sample = create_test_sample(44100, 0.25);
-        let chop = Chop::new(sample.clone(), 0, 0.0, 44100);
-        let stretched = mapper.apply_time_stretch(&chop, 0.5);
-        assert!(stretched.len() > sample.len());
-    }
-
-    #[test]
-    fn test_time_stretch_shorter() {
-        let mapper = Mapper::new(44100);
-        let sample = create_test_sample(44100, 0.5);
-        let chop = Chop::new(sample.clone(), 0, 0.0, 44100);
-        let compressed = mapper.apply_time_stretch(&chop, 0.25);
-        assert!(compressed.len() < sample.len());
-    }
-
-    #[test]
     fn test_process_empty_notes() {
         let mapper = Mapper::new(44100);
         let chopper = SampleChopper::new(44100);
         let sample = create_test_sample(44100, 1.0);
-        let chops = chopper.chop(&sample, 4, ChopMode::Equal).unwrap();
+        let chops = chopper.chop(&sample, 4).unwrap();
         assert!(mapper.process(&[], &chops).is_err());
     }
 
@@ -616,18 +505,29 @@ mod tests {
     }
 
     #[test]
-    fn test_jdilla_mode_keeps_original_length() {
-        let mapper = Mapper::new(44100).with_style(MappingStyle::Jdilla);
+    fn test_jdilla_keeps_original_length() {
+        let mapper = Mapper::new(44100);
         let chopper = SampleChopper::new(44100);
         let sample = create_test_sample(44100, 1.0);
-        let chops = chopper.chop(&sample, 4, ChopMode::Equal).unwrap();
+        let chops = chopper.chop(&sample, 4).unwrap();
         let notes = create_test_notes(4);
 
         let mapped_chops = mapper.process(&notes, &chops).unwrap();
 
-        // In JDilla mode, chops should keep original length (no time stretch)
-        for (mc, chop) in mapped_chops.iter().zip(chops.iter()) {
-            assert_eq!(mc.len(), chop.len());
+        // In JDilla mode, mapped chops should have the same length as the chops they came from
+        // (not time-stretched). Check that each mapped chop's length matches the
+        // corresponding chop's length in the source chops.
+        for mc in &mapped_chops {
+            let source_chop = &chops[mc.chop_index];
+            // Note: mapped chop length should equal source chop length in JDilla mode
+            // (velocity is applied but doesn't change sample count)
+            assert_eq!(
+                mc.len(),
+                source_chop.len(),
+                "Mapped chop {} should keep length of source chop {}",
+                mc.chop_index,
+                mc.chop_index
+            );
         }
     }
 
@@ -638,5 +538,31 @@ mod tests {
         assert!(up.len() >= samples.len() * 2 - 1);
         let down = simple_resample(&samples, 88200, 44100);
         assert!(down.len() <= samples.len() / 2 + 1);
+    }
+
+    #[test]
+    fn test_strength_matching() {
+        let mapper = Mapper::new(44100).with_strength_matching(true);
+        let sr = 44100;
+        let s = vec![1.0f32; 4410]; // 0.1s of ones
+        let mut c0 = Chop::new(s.clone(), 0, 0.0, sr);
+        c0.strength = 0.9;
+        let mut c1 = Chop::new(s.clone(), 1, 0.1, sr);
+        c1.strength = 0.1;
+        let chops = vec![c0, c1];
+
+        let loud = Note::new(440.0, 0.0, 0.1, 0.9);
+        assert_eq!(
+            mapper.match_by_strength(&loud, &chops, &[0, 1]),
+            0,
+            "Loud note should match strong chop"
+        );
+
+        let soft = Note::new(440.0, 0.0, 0.1, 0.1);
+        assert_eq!(
+            mapper.match_by_strength(&soft, &chops, &[0, 1]),
+            1,
+            "Soft note should match weak chop"
+        );
     }
 }

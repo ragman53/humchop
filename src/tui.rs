@@ -5,12 +5,14 @@
 //! - Recording hummed melodies
 //! - Viewing detected notes
 //! - Processing and saving chopped output
+//!
+//! Uses JDilla-style chopping by default (strength-based matching, chops keep original length).
 
 use crate::audio_utils::{self, DEFAULT_SAMPLE_RATE};
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
-use crate::mapper::Mapper;
-use crate::sample_chopper::ChopMode;
+use crate::mapper::{Mapper, MapperConfig};
+use crate::sample_chopper::SampleChopper;
 
 #[cfg(feature = "audio-io")]
 use crate::recorder::{calculate_audio_level, Recorder};
@@ -85,8 +87,8 @@ pub struct App {
     pub recording_start: Option<Instant>,
     /// Processing progress (0.0 to 1.0)
     pub processing_progress: f32,
-    /// Selected chop mode
-    pub chop_mode: ChopMode,
+    /// Mapper configuration
+    pub mapper_config: MapperConfig,
     /// Audio level for recording meter (0.0 to 1.0)
     pub audio_level: f32,
     /// Quit flag
@@ -114,7 +116,7 @@ impl App {
             recording_duration: 0.0,
             recording_start: None,
             processing_progress: 0.0,
-            chop_mode: ChopMode::Equal,
+            mapper_config: MapperConfig::default(),
             audio_level: 0.0,
             should_quit: false,
             #[cfg(feature = "audio-io")]
@@ -259,33 +261,46 @@ impl App {
                 self.notes = notes.clone();
                 self.processing_progress = 0.5;
 
-                // Chop and map
-                let mapper = Mapper::new(self.sample_rate);
+                // Chop and map using JDilla-style
+                let chopper = SampleChopper::new(self.sample_rate);
+                let chops = match chopper.chop(&sample, notes.len()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.state = AppState::Error;
+                        self.error_message = Some(format!("Failed to chop: {}", e));
+                        return;
+                    }
+                };
 
-                match mapper.render(&sample, &notes, notes.len(), self.chop_mode) {
-                    Ok(output) => {
-                        self.processing_progress = 0.9;
+                self.processing_progress = 0.7;
 
-                        // Save output
-                        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                        let output_path =
-                            PathBuf::from(format!("output_chopped_{}.wav", timestamp));
+                let mapper = Mapper::with_config(self.sample_rate, self.mapper_config.clone());
+                let mapped = match mapper.process(&notes, &chops) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        self.state = AppState::Error;
+                        self.error_message = Some(format!("Failed to map: {}", e));
+                        return;
+                    }
+                };
 
-                        match audio_utils::write_wav(&output_path, &output, self.sample_rate) {
-                            Ok(()) => {
-                                self.output_path = Some(output_path);
-                                self.processing_progress = 1.0;
-                                self.state = AppState::Complete;
-                            }
-                            Err(e) => {
-                                self.state = AppState::Error;
-                                self.error_message = Some(format!("Failed to write output: {}", e));
-                            }
-                        }
+                self.processing_progress = 0.85;
+
+                let output = mapper.render_output(&mapped);
+
+                // Save output
+                let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let output_path = PathBuf::from(format!("output_chopped_{}.wav", timestamp));
+
+                match audio_utils::write_wav(&output_path, &output, self.sample_rate) {
+                    Ok(()) => {
+                        self.output_path = Some(output_path);
+                        self.processing_progress = 1.0;
+                        self.state = AppState::Complete;
                     }
                     Err(e) => {
                         self.state = AppState::Error;
-                        self.error_message = Some(format!("Failed to process: {}", e));
+                        self.error_message = Some(format!("Failed to write output: {}", e));
                     }
                 }
             }
@@ -319,12 +334,9 @@ impl App {
         self.error_message = Some(message);
     }
 
-    /// Toggle chop mode.
-    pub fn toggle_chop_mode(&mut self) {
-        self.chop_mode = match self.chop_mode {
-            ChopMode::Equal => ChopMode::Onset,
-            ChopMode::Onset => ChopMode::Equal,
-        };
+    /// Toggle pitch matching mode.
+    pub fn toggle_pitch_matching(&mut self) {
+        self.mapper_config.strength_matching = !self.mapper_config.strength_matching;
     }
 }
 
@@ -420,11 +432,14 @@ fn render_idle_content(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(""),
             Line::from("Usage: humchop <audio_file>"),
             Line::from(""),
+            Line::from("JDilla-style mode: chops keep original length,"),
+            Line::from("notes determine which chop plays (by strength/pitch)."),
+            Line::from(""),
             Line::from("Supported formats: WAV, MP3, FLAC"),
             Line::from(""),
             Line::from("Key bindings:"),
             Line::from("  r - Start/stop recording"),
-            Line::from("  m - Toggle chop mode (Equal/Onset)"),
+            Line::from("  m - Toggle matching mode (strength/pitch)"),
             Line::from("  q - Quit"),
         ]
     };
@@ -456,16 +471,20 @@ fn render_ready_content(frame: &mut Frame, area: Rect, app: &App) {
         "No sample data".to_string()
     };
 
-    let chop_mode_str = match app.chop_mode {
-        ChopMode::Equal => "Equal Division",
-        ChopMode::Onset => "Onset Detection",
+    let matching_mode = if app.mapper_config.strength_matching {
+        "Strength (JDilla)"
+    } else {
+        "Pitch"
     };
 
     let text = vec![
         Line::from(Span::raw(sample_info)),
         Line::from(Span::raw(sample_stats)),
         Line::from(""),
-        Line::from(Span::raw(format!("Chop mode: {}", chop_mode_str))),
+        Line::from(Span::raw(format!(
+            "Mode: JDilla | Matching: {}",
+            matching_mode
+        ))),
         Line::from(""),
         Line::from("Press 'r' to start recording your hum"),
     ];
@@ -529,7 +548,7 @@ fn render_processing_content(frame: &mut Frame, area: Rect, app: &App) {
     let remaining = " ".repeat(((1.0 - progress) * 20.0) as usize);
 
     let text = vec![
-        Line::from("Processing..."),
+        Line::from("Processing (JDilla-style)..."),
         Line::from(""),
         Line::from(format!(
             "Analyzing: {} Chopping: {} Mapping: {}",
@@ -641,15 +660,16 @@ fn render_error_content(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Render footer with status and controls.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let chop_mode_str = match app.chop_mode {
-        ChopMode::Equal => "Equal",
-        ChopMode::Onset => "Onset",
+    let matching_mode = if app.mapper_config.strength_matching {
+        "Strength"
+    } else {
+        "Pitch"
     };
 
     let status = match app.state {
         AppState::Idle => "[q] Quit | [r] Start Recording".to_string(),
         AppState::Loading => "[q] Quit".to_string(),
-        AppState::Ready => format!("[q] Quit | [r] Record | [m] Mode: {}", chop_mode_str),
+        AppState::Ready => format!("[q] Quit | [r] Record | [m] Mode: {}", matching_mode),
         AppState::Recording => "[r] Stop Recording".to_string(),
         AppState::Processing => "[q] Cancel".to_string(),
         AppState::Complete => "[r] New Recording | [q] Quit".to_string(),
@@ -733,7 +753,7 @@ fn handle_key_event(key: KeyEvent, app: &mut App) {
 
         KeyCode::Char('m') | KeyCode::Char('M') => {
             if app.state == AppState::Ready {
-                app.toggle_chop_mode();
+                app.toggle_pitch_matching();
             }
         }
 
