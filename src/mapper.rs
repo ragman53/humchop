@@ -263,6 +263,28 @@ impl Mapper {
         (12.0 * (to_hz / from_hz).log2()).round() as i32
     }
 
+    /// Apply fade in/out to prevent click noise at boundaries.
+    fn apply_fade(samples: &mut [f32], fade_samples: usize) {
+        if samples.len() < 2 || fade_samples == 0 {
+            return;
+        }
+
+        let fade_len = fade_samples.min(samples.len() / 4);
+
+        // Fade in (attack)
+        for i in 0..fade_len {
+            let gain = i as f32 / fade_len as f32;
+            samples[i] *= gain;
+        }
+
+        // Fade out (release)
+        for i in 0..fade_len {
+            let idx = samples.len() - 1 - i;
+            let gain = i as f32 / fade_len as f32;
+            samples[idx] *= gain;
+        }
+    }
+
     /// Apply velocity-based gain.
     pub fn apply_velocity_gain(&self, samples: &mut [f32], velocity: f32) {
         let gain = velocity.clamp(0.0, 1.0);
@@ -290,6 +312,11 @@ impl Mapper {
 
         // Velocity
         self.apply_velocity_gain(&mut samples, note.velocity);
+
+        // Apply fade to prevent click noise at boundaries
+        // Fade length: ~5ms at 44100Hz = ~220 samples
+        let fade_samples = (self.sample_rate as f64 * 0.005) as usize;
+        Self::apply_fade(&mut samples, fade_samples);
 
         let output_duration = samples.len() as f64 / self.sample_rate as f64;
         MappedChop::new(samples, chop.index, output_onset, output_duration)

@@ -462,8 +462,9 @@ fn run_interactive(
                 break;
             }
         }
-        // Safety: break after a few iterations
-        if hum_samples.len() > 100000 {
+        // Safety: break if we've collected enough samples for max duration
+        let max_samples = (sample_rate as f64 * 15.0) as usize * 2; // 15s * 2x buffer safety
+        if hum_samples.len() > max_samples {
             break;
         }
     }

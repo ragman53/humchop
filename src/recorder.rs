@@ -130,16 +130,16 @@ impl Recorder {
         let recording_flag = Arc::clone(&is_recording);
         let channels = self.channels;
 
-        // Build the input stream
+        // Build the input stream with proper sample normalization
         let stream = match config.sample_format() {
             SampleFormat::F32 => {
-                self.build_stream::<f32>(&device_name, &config.into(), tx, recording_flag, channels)
+                self.build_stream_f32(&device_name, &config.into(), tx, recording_flag, channels)
             }
             SampleFormat::I16 => {
-                self.build_stream::<i16>(&device_name, &config.into(), tx, recording_flag, channels)
+                self.build_stream_i16(&device_name, &config.into(), tx, recording_flag, channels)
             }
             SampleFormat::U16 => {
-                self.build_stream::<u16>(&device_name, &config.into(), tx, recording_flag, channels)
+                self.build_stream_u16(&device_name, &config.into(), tx, recording_flag, channels)
             }
             format => {
                 return Err(HumChopError::Other(format!(
@@ -166,30 +166,42 @@ impl Recorder {
         Ok(rx)
     }
 
-    /// Convert a sample value to f32.
+    /// Convert a sample value to f32 with proper normalization.
+    ///
+    /// - f32: passed through as-is (already normalized to ±1.0)
+    /// - i16: normalized to ±1.0 range
+    /// - u16: normalized to ±1.0 range (centered at 0.0)
     #[inline]
-    fn sample_to_f32<T: cpal::Sample>(sample: T) -> f32
-    where
-        f32: From<T>,
-    {
-        f32::from(sample)
+    fn sample_to_f32(sample: f32) -> f32 {
+        // f32 is already normalized
+        sample.clamp(-1.0, 1.0)
     }
 
-    /// Build a recording stream for a specific sample format.
-    fn build_stream<T>(
+    /// Convert i16 sample to normalized f32.
+    #[inline]
+    fn i16_to_f32(sample: i16) -> f32 {
+        // i16 range: -32768 to 32767
+        // Normalize to -1.0 to 1.0
+        sample as f32 / 32768.0
+    }
+
+    /// Convert u16 sample to normalized f32.
+    #[inline]
+    fn u16_to_f32(sample: u16) -> f32 {
+        // u16 range: 0 to 65535, where 32768 is silence (0.0)
+        // Normalize to -1.0 to 1.0
+        (sample as f32 - 32768.0) / 32768.0
+    }
+
+    /// Build a recording stream for f32 samples.
+    fn build_stream_f32(
         &self,
         device: &Device,
         config: &StreamConfig,
         tx: AudioSender,
         is_recording: Arc<AtomicBool>,
         channels: u16,
-    ) -> Result<Stream, HumChopError>
-    where
-        T: cpal::Sample + cpal::SizedSample + Send + 'static,
-        f32: From<T>,
-    {
-        let channels_u16 = channels;
-
+    ) -> Result<Stream, HumChopError> {
         let err_fn = |err| {
             log::error!("Recording error: {}", err);
         };
@@ -197,34 +209,114 @@ impl Recorder {
         device
             .build_input_stream(
                 config,
-                move |data: &[T], _: &cpal::InputCallbackInfo| {
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if !is_recording.load(Ordering::SeqCst) {
                         return;
                     }
 
-                    // Convert to mono f32 samples
-                    let samples: Vec<f32> = if channels_u16 == 1 {
+                    // Convert to mono f32 samples (already normalized)
+                    let samples: Vec<f32> = if channels == 1 {
                         data.iter().map(|&s| Self::sample_to_f32(s)).collect()
                     } else {
                         // Average channels to mono
-                        let mut mono = Vec::with_capacity(data.len() / channels_u16 as usize);
-                        for chunk in data.chunks(channels_u16 as usize) {
+                        let mut mono = Vec::with_capacity(data.len() / channels as usize);
+                        for chunk in data.chunks(channels as usize) {
                             let sum: f32 = chunk.iter().map(|&s| Self::sample_to_f32(s)).sum();
-                            mono.push(sum / channels_u16 as f32);
+                            mono.push(sum / channels as f32);
                         }
                         mono
                     };
 
-                    // Try to send, but ignore if channel is full or closed
                     let _ = tx.try_send(samples);
                 },
                 err_fn,
                 None,
             )
-            .map_err(|e| {
-                log::error!("Failed to build input stream: {}", e);
-                HumChopError::Other(format!("Failed to build input stream: {}", e))
-            })
+            .map_err(|e| HumChopError::Other(format!("Failed to build input stream: {}", e)))
+    }
+
+    /// Build a recording stream for i16 samples.
+    fn build_stream_i16(
+        &self,
+        device: &Device,
+        config: &StreamConfig,
+        tx: AudioSender,
+        is_recording: Arc<AtomicBool>,
+        channels: u16,
+    ) -> Result<Stream, HumChopError> {
+        let err_fn = |err| {
+            log::error!("Recording error: {}", err);
+        };
+
+        device
+            .build_input_stream(
+                config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    if !is_recording.load(Ordering::SeqCst) {
+                        return;
+                    }
+
+                    // Convert to mono f32 samples with normalization
+                    let samples: Vec<f32> = if channels == 1 {
+                        data.iter().map(|&s| Self::i16_to_f32(s)).collect()
+                    } else {
+                        // Average channels to mono
+                        let mut mono = Vec::with_capacity(data.len() / channels as usize);
+                        for chunk in data.chunks(channels as usize) {
+                            let sum: f32 = chunk.iter().map(|&s| Self::i16_to_f32(s)).sum();
+                            mono.push(sum / channels as f32);
+                        }
+                        mono
+                    };
+
+                    let _ = tx.try_send(samples);
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| HumChopError::Other(format!("Failed to build input stream: {}", e)))
+    }
+
+    /// Build a recording stream for u16 samples.
+    fn build_stream_u16(
+        &self,
+        device: &Device,
+        config: &StreamConfig,
+        tx: AudioSender,
+        is_recording: Arc<AtomicBool>,
+        channels: u16,
+    ) -> Result<Stream, HumChopError> {
+        let err_fn = |err| {
+            log::error!("Recording error: {}", err);
+        };
+
+        device
+            .build_input_stream(
+                config,
+                move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                    if !is_recording.load(Ordering::SeqCst) {
+                        return;
+                    }
+
+                    // Convert to mono f32 samples with normalization
+                    let samples: Vec<f32> = if channels == 1 {
+                        data.iter().map(|&s| Self::u16_to_f32(s)).collect()
+                    } else {
+                        // Average channels to mono
+                        let mut mono = Vec::with_capacity(data.len() / channels as usize);
+                        for chunk in data.chunks(channels as usize) {
+                            let sum: f32 = chunk.iter().map(|&s| Self::u16_to_f32(s)).sum();
+                            mono.push(sum / channels as f32);
+                        }
+                        mono
+                    };
+
+                    let _ = tx.try_send(samples);
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| HumChopError::Other(format!("Failed to build input stream: {}", e)))
     }
 
     /// Stop recording.

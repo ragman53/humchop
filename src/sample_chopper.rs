@@ -182,15 +182,29 @@ impl SampleChopper {
         }
 
         // ── Step 4: if still too few, fill with energy-based splits ─
-        while filtered.len() < num_chops - 1 {
+        let max_iterations = 10;
+        let mut iterations = 0;
+        while filtered.len() < num_chops - 1 && iterations < max_iterations {
+            let prev_len = filtered.len();
             filtered = self.fill_with_energy_splits(sample, &filtered, num_chops - 1);
+
+            // Check if we made progress
+            if filtered.len() == prev_len {
+                // No new boundaries added - fall back to equal division
+                return self.chop_equal_fallback(sample, num_chops);
+            }
+
+            // Check if we have enough now
             if filtered.len() >= num_chops - 1 {
                 break;
             }
-            // Safety: fall back to equal if energy splits also fail
-            if filtered.len() < 2 {
-                return self.chop_equal_fallback(sample, num_chops);
-            }
+
+            iterations += 1;
+        }
+
+        // Final safety check - if we still don't have enough, fall back
+        if filtered.len() < num_chops - 1 {
+            return self.chop_equal_fallback(sample, num_chops);
         }
 
         // Keep only the strongest num_chops-1 boundaries
