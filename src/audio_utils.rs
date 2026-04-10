@@ -241,30 +241,44 @@ impl WavOptions {
 /// Apply triangular noise dithering (TPDF).
 /// This adds noise with a triangular probability distribution, which is optimal
 /// for reducing quantization artifacts at lower bit depths.
-fn apply_dither(samples: &mut [f32], bits: u16) {
+///
+/// Uses a seed derived from sample content and a fixed base to ensure:
+/// 1. Deterministic enough for reproducible results
+/// 2. Different per-file to avoid repetitive artifacts
+fn apply_dither(samples: &[f32], bits: u16) -> Vec<f32> {
     if bits >= 32 || samples.is_empty() {
-        return;
+        return samples.to_vec();
     }
 
     // LSB weight for the target bit depth
     let lsb_weight = 2.0_f32.powf(-(bits as f32));
 
-    // Simple pseudo-random using xorshift
-    let mut state = 123456789u32;
+    // Create seed from sample content (sum of first few samples) + a base
+    // This ensures different seeds for different content while being deterministic
+    let seed_base: u32 = samples
+        .iter()
+        .take(1000)
+        .map(|s| (s.abs() * 1000.0) as u32)
+        .fold(0u32, |acc, x| acc.wrapping_add(x));
+    let mut state = seed_base.wrapping_mul(28657); // Use Fibonacci multiplier for better distribution
+
     let mut next_state = || {
+        state = state.wrapping_mul(28657).wrapping_add(12289); // LCG
         state ^= state.rotate_left(13);
         state ^= state.rotate_right(17);
-        state ^= state.rotate_left(5);
         state
     };
 
     // Triangular PDF: sum of two uniform random values gives triangular distribution
-    for sample in samples.iter_mut() {
+    let mut output = Vec::with_capacity(samples.len());
+    for &sample in samples {
         let r1 = (next_state() as f32 / u32::MAX as f32) * 2.0 - 1.0;
         let r2 = (next_state() as f32 / u32::MAX as f32) * 2.0 - 1.0;
         let dither = (r1 + r2) * lsb_weight * 0.5;
-        *sample = (*sample + dither).clamp(-1.0, 1.0);
+        output.push((sample + dither).clamp(-1.0, 1.0));
     }
+
+    output
 }
 
 /// Writes samples to a WAV file with specified options.
@@ -285,11 +299,11 @@ pub fn write_wav_with_options(
     let bits = options.bits_per_sample.min(32);
 
     // Quantize and dither if needed
-    let mut output_samples = samples.to_vec();
-
-    if bits < 32 && options.dither {
-        apply_dither(&mut output_samples, bits);
-    }
+    let output_samples = if bits < 32 && options.dither {
+        apply_dither(samples, bits)
+    } else {
+        samples.to_vec()
+    };
 
     match bits {
         16 | 24 => {

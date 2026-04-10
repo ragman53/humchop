@@ -452,14 +452,14 @@ impl SampleChopper {
             let hi = (i + half_window + 1).min(curve.len());
             let window = &curve[lo..hi];
 
-            // Compute median
+            // Compute median (using total_cmp for NaN safety)
             let mut sorted = window.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(|a, b| a.total_cmp(b));
             let median = sorted[sorted.len() / 2];
 
             // Compute MAD (median absolute deviation) for robust scaling
             let mut deviations: Vec<f32> = window.iter().map(|&v| (v - median).abs()).collect();
-            deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            deviations.sort_by(|a, b| a.total_cmp(b));
             let mad = deviations[deviations.len() / 2].max(1e-6);
 
             // Normalize: (value - median) / MAD, then clamp to positive
@@ -539,7 +539,7 @@ impl SampleChopper {
         }
 
         // Third pass: non-maximum suppression within min_distance
-        prominent_peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        prominent_peaks.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         let mut selected: Vec<(usize, f32)> = Vec::new();
         for &(idx, val) in &prominent_peaks {
@@ -637,7 +637,7 @@ impl SampleChopper {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         let mut selected: Vec<usize> = scored.iter().take(n).map(|x| x.0).collect();
         selected.sort();
         selected
@@ -728,7 +728,7 @@ impl SampleChopper {
                 let r = rms(&region[s..s + frame_size]);
                 (s + frame_size / 2, r)
             })
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap_or((region.len() / 2, 0.0));
 
         best_start

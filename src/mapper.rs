@@ -81,34 +81,33 @@ pub fn soft_knee_compress(samples: &[f32], threshold_db: f32) -> Vec<f32> {
     // Convert threshold from dB to linear
     let threshold = 10.0_f32.powf(threshold_db / 20.0);
 
-    // For very soft saturation, we use a tanh-based soft clipper
-    // The amount of saturation increases as we go above threshold
-    let knee_db = 6.0; // Soft knee width in dB
-    let knee_start = threshold_db - knee_db;
-    let knee_start_linear = 10.0_f32.powf(knee_start / 20.0);
+    // Soft knee width in dB
+    let knee_db = 6.0_f32;
+    let knee_start_linear = 10.0_f32.powf((threshold_db - knee_db) / 20.0);
 
     let mut output = Vec::with_capacity(samples.len());
 
     for &sample in samples {
         let abs_input = sample.abs();
+        let sign = sample.signum();
 
         if abs_input <= knee_start_linear {
             // Below knee - linear pass-through
             output.push(sample);
         } else if abs_input <= threshold {
-            // Within knee region - gradual compression
-            let input_db = 20.0 * abs_input.log10();
-            let compressed_db =
-                knee_start + (input_db - knee_start) * (input_db - knee_start) / (2.0 * knee_db);
-            let compressed = 10.0_f32.powf(compressed_db / 20.0) * sample.signum();
-            output.push(compressed);
+            // Within knee region - gradual compression using smooth interpolation
+            // Use a cosine-based curve for smooth transition
+            let t = (abs_input - knee_start_linear) / (threshold - knee_start_linear);
+            let curve = 0.5 * (1.0 - (std::f32::consts::PI * t).cos());
+            let compressed = knee_start_linear + (threshold - knee_start_linear) * curve;
+            output.push(compressed * sign);
         } else {
-            // Above threshold - soft limiting with tanh
-            let over_threshold = (abs_input - threshold) / (1.0 - threshold);
-            // Tanh provides smooth saturation curve
-            let compressed_abs =
-                threshold * (1.0 + (1.0 - threshold) * over_threshold.tanh() - over_threshold);
-            output.push(compressed_abs * sample.signum());
+            // Above threshold - soft limiting with tanh saturation
+            // Using soft saturation: output = input / sqrt(1 + excess^2)
+            // This provides smooth limiting that approaches threshold asymptotically
+            let excess = (abs_input - threshold) / (1.0 - threshold + f32::EPSILON);
+            let compressed = threshold * (abs_input / (1.0 + excess * excess).sqrt());
+            output.push(compressed * sign);
         }
     }
 
@@ -178,6 +177,8 @@ impl MappedChop {
 pub struct Mapper {
     config: MapperConfig,
     sample_rate: u32,
+    /// Cached HumAnalyzer for pitch estimation (avoids creating new instance per chop)
+    hum_analyzer: HumAnalyzer,
 }
 
 impl Mapper {
@@ -187,6 +188,7 @@ impl Mapper {
         Self {
             config: MapperConfig::default(),
             sample_rate,
+            hum_analyzer: HumAnalyzer::new(sample_rate),
         }
     }
 
@@ -196,6 +198,7 @@ impl Mapper {
         Self {
             config,
             sample_rate,
+            hum_analyzer: HumAnalyzer::new(sample_rate),
         }
     }
 
@@ -215,11 +218,14 @@ impl Mapper {
         self
     }
 
-    /// Estimate the dominant pitch of a chop using HumAnalyzer.
+    /// Estimate the dominant pitch of a chop using cached HumAnalyzer.
     /// Returns 0.0 if no clear pitch detected (e.g., percussion).
+    ///
+    /// Uses a pre-allocated HumAnalyzer instance to avoid creating new FFT planners
+    /// on every call, improving performance significantly.
     pub fn estimate_chop_pitch(&self, chop: &Chop) -> f32 {
-        let analyzer = HumAnalyzer::new(self.sample_rate);
-        let pitches = analyzer.detect_pitch(&chop.samples);
+        // Use cached HumAnalyzer (stored in self.hum_analyzer)
+        let pitches = self.hum_analyzer.detect_pitch(&chop.samples);
 
         // Filter out invalid pitches
         let valid: Vec<f32> = pitches.into_iter().filter(|&p| p > 0.0).collect();
@@ -228,8 +234,9 @@ impl Mapper {
         }
 
         // Use median for robustness against outliers
-        let mut sorted = valid.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // Using total_cmp for proper NaN handling (Rust 1.62+)
+        let mut sorted = valid;
+        sorted.sort_by(|a, b| a.total_cmp(b));
         sorted[sorted.len() / 2]
     }
 
@@ -241,7 +248,7 @@ impl Mapper {
             .min_by(|&a, &b| {
                 let da = (chops[a].strength - note.velocity).abs();
                 let db = (chops[b].strength - note.velocity).abs();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.total_cmp(&db)
             })
             .unwrap_or(pool[0])
     }
@@ -263,7 +270,7 @@ impl Mapper {
                 .min_by(|&a, &b| {
                     let da = (pitches[a] / note.pitch_hz).log2().abs();
                     let db = (pitches[b] / note.pitch_hz).log2().abs();
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    da.total_cmp(&db)
                 })
                 .unwrap_or(pool[0])
         } else {

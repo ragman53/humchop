@@ -306,9 +306,9 @@ impl HumAnalyzer {
             let pitch_hz = if segment_pitches.is_empty() {
                 continue; // Skip segments with no valid pitch
             } else {
-                // Use median for robustness
+                // Use median for robustness, total_cmp for NaN safety
                 let mut sorted = segment_pitches.clone();
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                sorted.sort_by(|a, b| a.total_cmp(b));
                 sorted[sorted.len() / 2]
             };
 
