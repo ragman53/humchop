@@ -1,4 +1,4 @@
-# HumChop - Implementation Status
+# HumChop - Implementation Status & TODO
 
 ## Completed Modules
 
@@ -25,16 +25,18 @@
 - [x] Handle single-note detection error
 - [x] `to_midi_note()` - MIDI number conversion
 - [x] `to_note_name()` - Note name (e.g., "A4", "C#5")
+- [x] `#[derive(Default)]` for `PitchAlgorithm`
 - [x] Unit tests
 
-### ✅ sample_chopper.rs
-- [x] JDilla-style chopping (single mode)
-- [x] RMS energy + spectral flux transient detection
-- [x] Adaptive thresholding
-- [x] Strength scoring per chop
+### ✅ sample_chopper.rs (v0.3.0 - Improved)
+- [x] Pre-emphasis filter (high-frequency boost)
+- [x] Multi-band onset strength (RMS + full-band flux + high-flux + mid-flux)
+- [x] Median-based normalization (sliding MAD scaling)
+- [x] Peak picking with prominence (3-pass algorithm)
+- [x] Multi-scale energy splitting fallback (5 frame sizes)
+- [x] Integrated strength scoring (60% mean + 40% peak)
 - [x] Boundary jitter for imperfect-feel
 - [x] Min/max chop length constraints
-- [x] Energy-based fallback splitting
 - [x] Unit tests
 
 ### ✅ mapper.rs
@@ -69,6 +71,7 @@
 - [x] Layout: Header, Main, Footer
 - [x] Recording level meter
 - [x] Progress display
+- [x] `#[derive(Default)]` for `AppState`
 
 ### ✅ main.rs
 - [x] CLI with clap
@@ -90,44 +93,77 @@
 
 ---
 
-## Documentation
+## Documentation ✅
 
-- [x] SPEC.md - Complete project specification
-- [x] README.md - Installation, usage, key features
+- [x] SPEC.md - Complete project specification (updated v0.3.0)
+- [x] README.md - Installation, usage, key features (updated v0.3.0)
+- [x] PLAN.md - Development roadmap (updated v0.3.0)
+- [x] TESTING.md - Manual test verification guide (updated v0.3.0)
+- [x] QWEN.md - Project context for AI assistant
 - [x] TODO.md - This file
 
 ---
 
 ## Quality Fixes Applied
 
-Based on code review, the following issues were fixed:
+### v0.3.0 - Chopping Quality
+1. **Pre-Emphasis Filter** - High-frequency boost prevents bass masking
+2. **Multi-Band Detection** - Full-band + high-flux + mid-flux for all content types
+3. **MAD Normalization** - Sliding median replaces naive mean threshold
+4. **Peak Prominence** - 3-pass algorithm for precise boundary placement
+5. **Multi-Scale Fallback** - 5 frame sizes for optimal split points
+6. **Integrated Scoring** - Chop strength over entire region, not single frame
 
-1. **Audio Recording Normalization** - i16/U16 samples now properly normalized
+### v0.2.0
+1. **Audio Recording Normalization** - i16/U16 samples properly normalized
 2. **Chop Count Consistency** - Loop limit prevents infinite loops
 3. **Click Noise Prevention** - Fade in/out applied to each chop
 4. **Recording Drain Loop** - Dynamic limit prevents early cutoff
 
 ---
 
-## Post-MVP Roadmap
+## Remaining Clippy Warnings (Non-Critical)
 
-### Phase 1: Quality Improvements
-- [ ] High-quality time stretching (rubato library)
-- [ ] Crossfade between chops
-- [ ] ADSR envelope on each chop
-- [ ] Waveform visualization
+These are in non-chopper modules and don't affect functionality:
 
-### Phase 2: Enhanced Features
-- [ ] Basic Pitch (ONNX) for higher accuracy
-- [ ] MIDI output
-- [ ] SFZ patch export
-- [ ] Beat grid quantization
+- [ ] `mapper.rs:287` - needless_range_loop in `apply_fade()` (cosmetic)
+- [ ] `recorder.rs:388` - manual_clamp in `calculate_audio_level()` (cosmetic)
+- [ ] `tui.rs:538` - unnecessary_cast in `render_recording_content()` (cosmetic)
+- [ ] `tui.rs:632` - option_as_ref_deref in `render_error_content()` (cosmetic)
+- [ ] `main.rs:100` - ptr_arg `&PathBuf` vs `&Path` (cosmetic)
+- [ ] `main.rs:231` - while_let_loop in drain loop (cosmetic)
+- [ ] `main.rs:343,555` - field_reassign_with_default (cosmetic)
 
-### Phase 3: GUI & Distribution
-- [ ] Dioxus GUI
-- [ ] macOS app bundle
-- [ ] Windows installer
-- [ ] WebAssembly version
+---
+
+## Next Improvement Priorities
+
+### High Priority — Audio Quality
+
+These improvements have the biggest impact on the user's end result:
+
+1. **Crossfade between chops** — Currently 5ms gaps between chops; smooth crossfade would eliminate any remaining click artifacts and create a more polished output
+2. **Rubato resampling in mapper** — Replace `linear_resample()` with `rubato::SincResampler` for higher-quality pitch shifting (linear interpolation introduces aliasing artifacts)
+3. **Soft-knee compression on output** — Prevent clipping when multiple chops overlap during rendering; a simple lookahead compressor would keep output peaks below 0dBFS
+4. **Dithering for 16-bit output** — Optional dither when writing output to reduce quantization noise
+
+### Medium Priority — Workflow
+
+These make the tool easier to use and debug:
+
+5. **`--no-tui` headless mode** — Add a `--no-tui` flag for scripting/batch processing; useful for producers who want to automate the pipeline
+6. **Chop preview in TUI** — Let users preview individual chops before processing (`1-9` keys to hear each chop); helps verify transient detection quality
+7. **Waveform visualization** — Simple ASCII waveform in TUI showing chop boundaries; gives visual feedback on where chops land
+8. **Batch processing** — Process multiple samples at once from a directory; `humchop ./drums/*.wav --batch`
+
+### Low Priority — Features
+
+Nice-to-have features for future versions:
+
+9. **Beat grid quantization** — Snap chop boundaries to a user-defined BPM/grid; useful for producers who want rhythmic consistency
+10. **SFZ export** — Generate an SFZ sampler patch from the chops; lets users play the chops as a virtual instrument in any DAW
+11. **MIDI output** — Export detected hum notes as a `.mid` file; useful for further editing in a DAW
+12. **Multi-sample blending** — Load 2-3 source samples and blend chops across them; creates richer, layered output
 
 ---
 
@@ -137,3 +173,4 @@ Based on code review, the following issues were fixed:
 - Background noise affects pitch detection
 - Commercial-friendly licenses only (Apache 2.0, MIT)
 - Output format is WAV only (no MP3/FLAC encoding)
+- Max recording duration: 15 seconds (TUI)

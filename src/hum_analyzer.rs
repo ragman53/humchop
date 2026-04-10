@@ -56,19 +56,14 @@ impl Note {
 }
 
 /// Detection algorithm to use for pitch detection.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PitchAlgorithm {
     /// YIN algorithm - good for monophonic signals
+    #[allow(dead_code)]
     Yin,
     /// McLeod algorithm - faster, good for real-time
+    #[default]
     Mcleod,
-}
-
-impl Default for PitchAlgorithm {
-    fn default() -> Self {
-        PitchAlgorithm::Mcleod
-    }
 }
 
 /// Configuration for pitch detection.
@@ -172,10 +167,10 @@ impl HumAnalyzer {
             buffer.copy_from_slice(&samples[window_start..window_end]);
 
             // Apply Hann window
-            for i in 0..window_size {
+            for (i, sample) in buffer.iter_mut().enumerate().take(window_size) {
                 let multiplier = 0.5
                     * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / window_size as f32).cos());
-                buffer[i] *= multiplier;
+                *sample *= multiplier;
             }
 
             // Detect pitch - API: get_pitch(signal, sample_rate, power_threshold, clarity_threshold)

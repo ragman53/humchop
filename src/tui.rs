@@ -16,6 +16,8 @@ use crate::hum_analyzer::{HumAnalyzer, Note};
 use crate::mapper::{Mapper, MapperConfig};
 use crate::sample_chopper::SampleChopper;
 
+use std::path::Path;
+
 #[cfg(feature = "audio-io")]
 use crate::recorder::Recorder;
 
@@ -41,10 +43,10 @@ use tokio::sync::mpsc as tokio_mpsc;
 const MAX_RECORDING_DURATION_SECS: f64 = 15.0;
 
 /// Application state.
-#[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AppState {
     /// Initial state, waiting for sample
+    #[default]
     Idle,
     /// Loading a sample file
     Loading,
@@ -58,12 +60,6 @@ pub enum AppState {
     Complete,
     /// Error state
     Error,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        AppState::Idle
-    }
 }
 
 /// Application-wide state.
@@ -131,9 +127,9 @@ impl App {
     }
 
     /// Load a sample file.
-    pub fn load_sample(&mut self, path: &PathBuf) -> Result<(), HumChopError> {
+    pub fn load_sample(&mut self, path: &Path) -> Result<(), HumChopError> {
         self.state = AppState::Loading;
-        self.sample_path = Some(path.clone());
+        self.sample_path = Some(path.to_path_buf());
 
         let (samples, sample_rate) = audio_utils::load_audio(path)
             .map_err(|e| HumChopError::Other(format!("Failed to load audio: {}", e)))?;
@@ -539,7 +535,7 @@ fn render_recording_content(frame: &mut Frame, area: Rect, app: &App) {
     // Render level meter
     let meter_area = Rect::new(area.x + 1, area.y + 6, area.width.saturating_sub(2), 2);
     let gauge = Gauge::default()
-        .ratio((elapsed / 15.0) as f64)
+        .ratio(elapsed / 15.0)
         .label(format!("{:.1}s", elapsed))
         .style(Style::default().fg(Color::Red));
     frame.render_widget(gauge, meter_area);
@@ -633,11 +629,7 @@ fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Render error content.
 fn render_error_content(frame: &mut Frame, area: Rect, app: &App) {
-    let error_msg = app
-        .error_message
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("Unknown error");
+    let error_msg = app.error_message.as_deref().unwrap_or("Unknown error");
 
     let text = vec![
         Line::from(vec![

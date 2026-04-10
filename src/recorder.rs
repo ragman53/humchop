@@ -385,7 +385,7 @@ pub fn calculate_audio_level(samples: &[f32]) -> f32 {
     };
 
     // Convert dB to normalized level: -60dB -> 0, 0dB -> 1
-    ((db + 60.0) / 60.0).max(0.0).min(1.0)
+    ((db + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

@@ -49,9 +49,12 @@ struct Note {
 ```
 
 **5. JDilla-Style Sample Chopping**
-- Transient detection: Combined RMS energy + spectral flux
-- Adaptive threshold for loud/quiet sections
-- Strength scoring per chop (0.0-1.0)
+- Pre-emphasis filter (high-frequency boost)
+- Multi-band transient detection: RMS derivative + full-band flux + high-flux (3kHz+) + mid-flux (300Hz–3kHz)
+- Median-based normalization (sliding window with MAD scaling)
+- Peak picking with prominence detection (3-pass algorithm)
+- Integrated strength scoring over chop region (60% mean + 40% peak)
+- Multi-scale energy splitting fallback (5 frame sizes)
 - Boundary jitter (±2ms) for imperfect-feel
 - Min/max chop length constraints
 
@@ -122,7 +125,7 @@ pactl list sources short
 
 **Note**: WSL2 requires `cpal` with `pulseaudio` feature:
 ```toml
-cpal = { version = "0.16", features = ["pulseaudio"] }
+cpal = { version = "0.17", features = ["pulseaudio"] }
 ```
 
 ---
@@ -139,7 +142,12 @@ cpal = { version = "0.16", features = ["pulseaudio"] }
 │     └── mpsc channel
 ├── Hum Analyzer       (pitch_detection + rustfft)
 │     └── Vec<Note>
-├── Sample Chopper     (JDilla-style transient detection)
+├── Sample Chopper     (multi-band transient detection)
+│     ├── Pre-emphasis filter
+│     ├── Multi-band onset strength (RMS + flux + high-flux + mid-flux)
+│     ├── Median-based normalization (MAD scaling)
+│     ├── Peak picking with prominence
+│     └── Integrated strength scoring
 │     └── Vec<Chop> with strength scores
 ├── Mapper             (strength/pitch matching + fade)
 └── Output Writer      (hound)
@@ -151,7 +159,7 @@ src/
 ├── main.rs           - Entry point, CLI, audio-io integration
 ├── tui.rs            - Terminal UI
 ├── hum_analyzer.rs   - Pitch detection, transcription
-├── sample_chopper.rs - JDilla-style chopping
+├── sample_chopper.rs - Multi-band transient detection + JDilla-style chopping
 ├── mapper.rs         - Note-to-chop matching
 ├── audio_utils.rs    - Audio loading/saving
 ├── recorder.rs       - Microphone recording
@@ -168,12 +176,13 @@ src/
 | TUI | ratatui | 0.29 | Terminal UI rendering |
 | Terminal I/O | crossterm | 0.28 | Key events, screen control |
 | Async | tokio | 1 | Event loop multiplexing |
-| Audio I/O | cpal | 0.16 | Recording (pulseaudio feature) |
+| Audio I/O | cpal | 0.17 | Recording (pulseaudio feature) |
 | WAV I/O | hound | 3.5 | WAV reading/writing |
 | Decoding | symphonia | 0.5 | MP3/FLAC/WAV decoding |
 | Playback | rodio | 0.19 | Audio preview |
 | Pitch | pitch-detection | 0.3 | YIN pitch detection |
 | FFT | rustfft | 6.2 | Spectral flux |
+| Resampling | rubato | 0.15 | Sample rate conversion |
 | CLI | clap | 4 | Argument parsing |
 | Time | chrono | 0.4 | Timestamps |
 | Logging | log/env_logger | 0.4 | Debug output |
@@ -186,12 +195,16 @@ src/
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `fft_window` | 1024 | FFT window size |
+| `fft_window` | 2048 | FFT window size |
 | `hop_size` | 256 | Analysis hop (~5.8ms at 44100Hz) |
-| `energy_weight` | 0.6 | Energy vs spectral flux balance |
-| `threshold_factor` | 1.4 | Onset detection threshold multiplier |
-| `adaptive_window` | 20 | Lookback frames for threshold |
-| `min_chop_secs` | 0.05 | Minimum chop length (50ms) |
+| `energy_weight` | 0.4 | Energy vs spectral flux balance |
+| `threshold_factor` | 1.2 | Onset detection threshold multiplier |
+| `adaptive_window` | 30 | Lookback frames for normalization |
+| `forward_window` | 30 | Lookahead frames for normalization |
+| `pre_emphasis` | 0.97 | High-frequency boost coefficient |
+| `peak_prominence` | 0.3 | Minimum peak prominence threshold |
+| `peak_min_distance` | 5 | Minimum frames between peaks |
+| `min_chop_secs` | 0.03 | Minimum chop length (30ms) |
 | `max_chop_secs` | 2.0 | Maximum chop length |
 | `boundary_jitter_secs` | 0.002 | Random boundary offset (±2ms) |
 
@@ -207,14 +220,16 @@ src/
 
 ## 8. Key Algorithms
 
-### JDilla-Style Chopping
+### JDilla-Style Chopping (v0.3.0)
 
-1. Compute onset strength curve (RMS derivative + spectral flux)
-2. Apply adaptive threshold (responds to loud and quiet sections)
-3. Pick boundary positions at detected transients
-4. Enforce min/max chop length constraints
-5. Apply boundary jitter for imperfect-feel
-6. Score each chop by transient strength
+1. Apply pre-emphasis filter to boost high-frequency transients
+2. Compute multi-band onset strength curve (RMS derivative + full-band spectral flux + high-flux + mid-flux)
+3. Normalize using sliding median + MAD scaling for consistent detection
+4. Peak picking with prominence: find local maxima → compute prominence → non-maximum suppression
+5. Enforce min/max chop length constraints
+6. Apply boundary jitter for imperfect-feel
+7. Score each chop by integrated energy over its region (60% mean + 40% peak)
+8. Multi-scale energy splitting fallback (tries 5 frame sizes)
 
 ### Strength Matching
 
@@ -226,7 +241,16 @@ High-velocity notes match strong transient chops:
 
 ## 9. Version History
 
-### v0.2.0 (Current)
+### v0.3.0 (Current)
+- Pre-emphasis filter for high-frequency transient boost
+- Multi-band onset detection (full-band + high-flux + mid-flux)
+- Median-based normalization (MAD scaling)
+- Peak picking with prominence detection
+- Multi-scale energy splitting fallback
+- Integrated strength scoring over chop region
+- Tighter defaults: 2048 FFT window, 30ms min chop, 0.4 energy weight
+
+### v0.2.0
 - Fixed audio recording normalization
 - Fixed chop count consistency
 - Added click noise prevention (fades)

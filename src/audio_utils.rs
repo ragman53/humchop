@@ -262,6 +262,7 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
+    #[allow(dead_code, clippy::unwrap_used)]
     fn create_test_wav(samples: &[f32], sample_rate: u32) -> NamedTempFile {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
@@ -282,8 +283,9 @@ mod tests {
         temp_file
     }
 
+    #[allow(dead_code, clippy::unwrap_used)]
     fn create_named_temp_wav(samples: &[f32], sample_rate: u32) -> NamedTempFile {
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
         // Write wav header manually or use hound
         let path = temp_file.path();
 

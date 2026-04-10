@@ -72,10 +72,14 @@ impl MappedChop {
         }
     }
 
+    /// Get the number of samples.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
+    /// Check if there are no samples.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
@@ -85,6 +89,7 @@ impl MappedChop {
 // Mapper
 // ─────────────────────────────────────────────────────────────
 
+/// Create a new Mapper with default settings.
 pub struct Mapper {
     config: MapperConfig,
     sample_rate: u32,
@@ -92,6 +97,7 @@ pub struct Mapper {
 
 impl Mapper {
     /// Create a new Mapper with default settings.
+    #[allow(dead_code)]
     pub fn new(sample_rate: u32) -> Self {
         Self {
             config: MapperConfig::default(),
@@ -275,16 +281,18 @@ impl Mapper {
         }
 
         let fade_len = fade_samples.min(samples.len() / 4);
+        let len = samples.len();
 
-        // Fade in (attack)
-        for i in 0..fade_len {
+        // Apply fade in (attack)
+        for (i, sample) in samples.iter_mut().enumerate().take(fade_len) {
             let gain = i as f32 / fade_len as f32;
-            samples[i] *= gain;
+            *sample *= gain;
         }
 
-        // Fade out (release)
+        // Fade out (release) - use range loop as we need computed index
+        #[allow(clippy::needless_range_loop)]
         for i in 0..fade_len {
-            let idx = samples.len() - 1 - i;
+            let idx = len - 1 - i;
             let gain = i as f32 / fade_len as f32;
             samples[idx] *= gain;
         }
@@ -484,6 +492,7 @@ mod tests {
         assert!(mapper.config.strength_matching);
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_map_notes_to_chops() {
         let mapper = Mapper::new(44100);
@@ -511,6 +520,7 @@ mod tests {
         assert_eq!(samples, vec![0.25f32; 4]);
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_process_empty_notes() {
         let mapper = Mapper::new(44100);
@@ -538,6 +548,7 @@ mod tests {
         assert!(!output.is_empty());
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_jdilla_keeps_original_length() {
         let mapper = Mapper::new(44100);
