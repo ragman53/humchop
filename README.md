@@ -157,7 +157,7 @@ let output = mapper.render_output(&mapped);
 
 ## Spec Changes Log
 
-### v0.3.0 (Current)
+### v0.2.0 (Current)
 
 Based on code review feedback, the following changes were made:
 
@@ -222,7 +222,7 @@ output = mapper.render(&sample, &notes, num_chops)?;
 
 ---
 
-### v0.3.0 - Code Review Fixes
+### v0.2.0 - Code Review Fixes
 
 Critical fixes based on Claude code review:
 

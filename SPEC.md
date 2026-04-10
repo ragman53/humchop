@@ -226,13 +226,13 @@ High-velocity notes match strong transient chops:
 
 ## 9. Version History
 
-### v0.3.0 (Current)
+### v0.2.0 (Current)
 - Fixed audio recording normalization
 - Fixed chop count consistency
 - Added click noise prevention (fades)
 - Fixed recording drain loop
 
-### v0.2.0
+### v0.1.0
 - JDilla-style mode only (removed TimeStretch mode)
 - Strength-based matching
 - Pitch-based matching option

@@ -2,7 +2,7 @@
 
 ## Current Status
 
-### ✅ v0.3.0 - Production Ready
+### ✅ v0.1.0 - MVP Core
 - All 40 unit tests passing
 - JDilla-style chopping with strength matching
 - Pitch-based matching as option
@@ -14,25 +14,18 @@
 
 ## Version History
 
-### v0.3.0 - Quality Fixes
-- Fixed audio recording normalization (i16/U16 → ±1.0)
-- Fixed chop count consistency (loop limit)
-- Added click noise prevention (fades)
-- Fixed recording drain loop
-- README.md added
-
-### v0.2.0 - JDilla Mode
-- Removed TimeStretch vs JDilla split
-- JDilla mode is now the only mode
-- Strength-based matching (loud → strong transients)
-- Pitch-based matching as option
+### v0.2.0 (Planned)
+- JDilla-style mode only
+- Strength-based matching
+- Pitch-based matching option
 - Improved transient detection
+- Code review fixes (normalization, fades, etc.)
 
 ### v0.1.0 - MVP
 - Core chopping functionality
 - Demo mode for testing
 - TUI framework
-- 30 tests passing
+- 40 tests passing
 
 ---
 
