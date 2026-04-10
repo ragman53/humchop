@@ -324,9 +324,14 @@ fn run_interactive(
         match choice.as_str() {
             "p" => {
                 if !player.is_playing() {
-                    println!("{} Playing sample preview (5 seconds)...", "🎵".cyan());
+                    println!("{} Playing sample preview...", "🎵".cyan());
                     if let Err(e) = player.preview(&samples, sample_rate, 5.0) {
                         println!("{} Preview failed: {}", "✗".red(), e);
+                    } else {
+                        // Wait for playback to finish (up to 6 seconds)
+                        std::thread::sleep(std::time::Duration::from_secs(6));
+                        player.stop();
+                        println!("{} Playback finished", "✓".green());
                     }
                 } else {
                     println!("{} Already playing...", "🔊".yellow());

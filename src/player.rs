@@ -4,9 +4,7 @@
 //! and generated output.
 
 use crate::error::HumChopError;
-use rodio::{OutputStream, Sink, Source};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use rodio::{OutputStream, Sink};
 
 /// Audio player state.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,20 +13,25 @@ pub enum PlaybackState {
     Idle,
     /// Currently playing.
     Playing,
-    /// Playback paused.
-    Paused,
     /// Error occurred.
     Error(String),
 }
 
 /// Audio player for previewing samples.
+///
+/// This player keeps the OutputStream and Sink alive during playback
+/// to ensure audio plays correctly.
 pub struct Player {
     /// Playback state.
     state: PlaybackState,
-    /// Flag to control playback.
-    is_playing: Arc<AtomicBool>,
     /// Sample rate of current audio.
     sample_rate: u32,
+    /// Output stream (must be kept alive during playback).
+    #[allow(dead_code)]
+    stream: Option<rodio::OutputStream>,
+    /// Audio sink (must be kept alive during playback).
+    #[allow(dead_code)]
+    sink: Option<rodio::Sink>,
 }
 
 impl Player {
@@ -36,8 +39,9 @@ impl Player {
     pub fn new() -> Self {
         Self {
             state: PlaybackState::Idle,
-            is_playing: Arc::new(AtomicBool::new(false)),
             sample_rate: 44100,
+            stream: None,
+            sink: None,
         }
     }
 
@@ -56,57 +60,42 @@ impl Player {
         self.state == PlaybackState::Playing
     }
 
-    /// Play a WAV/MP3/FLAC file.
-    #[allow(dead_code)]
-    pub fn play_file(&mut self, path: &std::path::Path) -> Result<(), HumChopError> {
-        use std::io::BufReader;
-
-        // Stop any current playback
+    /// Play raw audio samples (f32 mono).
+    pub fn play_samples(&mut self, samples: &[f32], sample_rate: u32) -> Result<(), HumChopError> {
+        // Stop any current playback first
         self.stop();
 
-        // Get output device
+        self.sample_rate = sample_rate;
+
+        // Get default output stream
         let (stream, stream_handle) = OutputStream::try_default().map_err(|e| {
             log::error!("Failed to get audio output: {}", e);
             HumChopError::Other(format!("Failed to get audio output: {}", e))
         })?;
 
-        let file = std::fs::File::open(path)
-            .map_err(|e| HumChopError::IoError(format!("Failed to open audio file: {}", e)))?;
+        // Create sink
+        let sink = Sink::try_new(&stream_handle).map_err(|e| {
+            log::error!("Failed to create sink: {}", e);
+            HumChopError::Other(format!("Failed to create sink: {}", e))
+        })?;
 
-        let reader = BufReader::new(file);
-
-        // Decode the audio file
-        let source = rodio::Decoder::new(reader)
-            .map_err(|e| HumChopError::DecodeError(format!("Failed to decode audio: {}", e)))?;
-
-        self.sample_rate = source.sample_rate();
-
-        // Create sink and play
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| HumChopError::Other(format!("Failed to create sink: {}", e)))?;
-
-        sink.append(source);
-        self.is_playing.store(true, Ordering::SeqCst);
-        self.state = PlaybackState::Playing;
-
-        // Keep stream alive
-        std::mem::forget(stream);
-
-        log::info!("Playback started from file: {:?}", path);
-        Ok(())
-    }
-
-    /// Play raw audio samples (f32 mono).
-    pub fn play_samples(&mut self, samples: &[f32], sample_rate: u32) -> Result<(), HumChopError> {
-        // Stop any current playback
-        self.stop();
-
-        self.sample_rate = sample_rate;
-
-        // Convert to rodio source
+        // Convert samples to rodio source
         let source = rodio::buffer::SamplesBuffer::new(1, sample_rate, samples);
 
-        self.play_buffer(source)
+        // Append source to sink
+        sink.append(source);
+
+        // Store stream and sink to keep them alive
+        self.stream = Some(stream);
+        self.sink = Some(sink);
+        self.state = PlaybackState::Playing;
+
+        log::info!(
+            "Playback started ({} samples, {} Hz)",
+            samples.len(),
+            sample_rate
+        );
+        Ok(())
     }
 
     /// Preview samples with limited duration.
@@ -116,7 +105,7 @@ impl Player {
         sample_rate: u32,
         duration_secs: f32,
     ) -> Result<(), HumChopError> {
-        // Stop any current playback
+        // Stop any current playback first
         self.stop();
 
         self.sample_rate = sample_rate;
@@ -129,15 +118,48 @@ impl Player {
             samples
         };
 
+        log::info!(
+            "Preview: {} samples, {:.1}s limit",
+            preview_samples.len(),
+            duration_secs
+        );
+
+        // Get default output stream
+        let (stream, stream_handle) = OutputStream::try_default().map_err(|e| {
+            log::error!("Failed to get audio output: {}", e);
+            HumChopError::Other(format!("Failed to get audio output: {}", e))
+        })?;
+
+        // Create sink
+        let sink = Sink::try_new(&stream_handle).map_err(|e| {
+            log::error!("Failed to create sink: {}", e);
+            HumChopError::Other(format!("Failed to create sink: {}", e))
+        })?;
+
+        // Convert to rodio source
         let source = rodio::buffer::SamplesBuffer::new(1, sample_rate, preview_samples);
-        self.play_buffer(source)
+
+        // Append source to sink
+        sink.append(source);
+
+        // Store stream and sink to keep them alive
+        self.stream = Some(stream);
+        self.sink = Some(sink);
+        self.state = PlaybackState::Playing;
+
+        log::info!("Preview playback started");
+        Ok(())
     }
 
-    /// Play from a decoded source (using rodio Decoder).
-    fn play_decoded(&mut self, path: &std::path::Path) -> Result<(), HumChopError> {
+    /// Play a WAV/MP3/FLAC file.
+    #[allow(dead_code)]
+    pub fn play_file(&mut self, path: &std::path::Path) -> Result<(), HumChopError> {
         use std::io::BufReader;
 
-        // Get output device
+        // Stop any current playback first
+        self.stop();
+
+        // Get output stream
         let (stream, stream_handle) = OutputStream::try_default().map_err(|e| {
             log::error!("Failed to get audio output: {}", e);
             HumChopError::Other(format!("Failed to get audio output: {}", e))
@@ -147,66 +169,49 @@ impl Player {
         let file = std::fs::File::open(path)
             .map_err(|e| HumChopError::IoError(format!("Failed to open audio file: {}", e)))?;
 
-        // Create decoder
         let reader = BufReader::new(file);
+
+        // Decode the audio file
         let source = rodio::Decoder::new(reader)
             .map_err(|e| HumChopError::DecodeError(format!("Failed to decode audio: {}", e)))?;
 
-        // Create sink and play
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| HumChopError::Other(format!("Failed to create sink: {}", e)))?;
+        // Note: sample_rate will be available from the source when played
 
-        sink.append(source);
-        self.is_playing.store(true, Ordering::SeqCst);
-        self.state = PlaybackState::Playing;
-        self.sample_rate = 44100;
-
-        // Keep stream alive
-        std::mem::forget(stream);
-
-        log::info!("Playback started from file: {:?}", path);
-        Ok(())
-    }
-
-    /// Play from a buffer source.
-    fn play_buffer(
-        &mut self,
-        source: rodio::buffer::SamplesBuffer<f32>,
-    ) -> Result<(), HumChopError> {
-        // Get output device
-        let (stream, stream_handle) = OutputStream::try_default().map_err(|e| {
-            log::error!("Failed to get audio output: {}", e);
-            HumChopError::Other(format!("Failed to get audio output: {}", e))
-        })?;
-
-        // Create sink with the stream handle
+        // Create sink
         let sink = Sink::try_new(&stream_handle)
             .map_err(|e| HumChopError::Other(format!("Failed to create sink: {}", e)))?;
 
         // Play the source
         sink.append(source);
-        self.is_playing.store(true, Ordering::SeqCst);
+
+        // Store to keep alive
+        self.stream = Some(stream);
+        self.sink = Some(sink);
         self.state = PlaybackState::Playing;
 
-        log::info!("Playback started");
-
+        log::info!("Playback started from file: {:?}", path);
         Ok(())
     }
 
     /// Stop playback.
     pub fn stop(&mut self) {
-        self.is_playing.store(false, Ordering::SeqCst);
+        // Detach sink to stop playback
+        if let Some(sink) = self.sink.take() {
+            sink.detach();
+        }
+        self.stream = None;
+        self.sink = None;
         self.state = PlaybackState::Idle;
         log::info!("Playback stopped");
     }
 
-    /// Pause playback.
+    /// Wait for playback to finish (blocks until done).
     #[allow(dead_code)]
-    pub fn pause(&mut self) {
-        if self.state == PlaybackState::Playing {
-            self.state = PlaybackState::Paused;
-            log::info!("Playback paused");
+    pub fn wait(&mut self) {
+        if let Some(sink) = &self.sink {
+            sink.sleep_until_end();
         }
+        self.state = PlaybackState::Idle;
     }
 }
 
@@ -216,11 +221,15 @@ impl Default for Player {
     }
 }
 
+impl Drop for Player {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 /// List available audio output devices.
 #[allow(dead_code)]
 pub fn list_output_devices() -> Vec<String> {
-    // Note: rodio doesn't expose device enumeration directly
-    // This is a placeholder for future enhancement
     vec!["default".to_string()]
 }
 
