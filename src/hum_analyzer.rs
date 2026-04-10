@@ -46,7 +46,7 @@ impl Note {
             "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
         ];
         let midi = self.to_midi_note();
-        if midi < 0 || midi > 127 {
+        if !(0..=127).contains(&midi) {
             return "?".to_string();
         }
         let octave = (midi / 12) - 1;
@@ -57,6 +57,7 @@ impl Note {
 
 /// Detection algorithm to use for pitch detection.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum PitchAlgorithm {
     /// YIN algorithm - good for monophonic signals
     Yin,
@@ -78,6 +79,7 @@ pub struct PitchConfig {
     /// Maximum frequency to detect (Hz)
     pub max_frequency: f32,
     /// Algorithm to use for pitch detection
+    #[allow(dead_code)]
     pub algorithm: PitchAlgorithm,
     /// FFT window size (must be power of 2)
     pub window_size: usize,
@@ -136,6 +138,7 @@ impl HumAnalyzer {
     }
 
     /// Create a new HumAnalyzer with custom settings.
+    #[allow(dead_code)]
     pub fn with_config(
         sample_rate: u32,
         pitch_config: PitchConfig,
@@ -500,11 +503,7 @@ mod tests {
         let note1 = generate_sine_wave(440.0, sample_rate, 0.3);
         let note2 = generate_sine_wave(523.0, sample_rate, 0.3);
         let silence = vec![0.0f32; 4410]; // 0.1s silence
-        let samples: Vec<f32> = note1
-            .into_iter()
-            .chain(silence.into_iter())
-            .chain(note2.into_iter())
-            .collect();
+        let samples: Vec<f32> = note1.into_iter().chain(silence).chain(note2).collect();
 
         let analyzer = HumAnalyzer::new(sample_rate);
         let result = analyzer.transcribe(&samples);
@@ -514,7 +513,7 @@ mod tests {
         match result {
             Ok(notes) => {
                 println!("Detected {} notes", notes.len());
-                assert!(notes.len() >= 1, "Should detect at least 1 note");
+                assert!(!notes.is_empty(), "Should detect at least 1 note");
             }
             Err(HumChopError::SingleNoteDetected) => {
                 println!("Only one note detected - acceptable for synthetic test");

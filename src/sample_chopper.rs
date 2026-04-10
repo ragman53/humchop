@@ -16,6 +16,7 @@ use rustfft::{num_complex::Complex, FftPlanner};
 
 /// A single audio chop.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Chop {
     /// Audio samples (mono, normalized f32 ±1.0)
     pub samples: Vec<f32>,
@@ -121,6 +122,7 @@ impl SampleChopper {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_dilla_config(mut self, cfg: DillaConfig) -> Self {
         self.dilla_config = cfg;
         self
@@ -420,7 +422,7 @@ impl SampleChopper {
         &self,
         candidates: &[usize],
         curve: &[f32],
-        positions: &[usize],
+        _positions: &[usize],
         n: usize,
         _total_samples: usize,
     ) -> Vec<usize> {
@@ -492,6 +494,7 @@ impl SampleChopper {
     }
 
     /// Get the total duration of chops.
+    #[allow(dead_code)]
     pub fn total_duration(&self, chops: &[Chop]) -> f64 {
         chops.iter().map(|c| c.duration).sum()
     }

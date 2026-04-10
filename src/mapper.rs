@@ -16,6 +16,7 @@ use crate::sample_chopper::{Chop, SampleChopper};
 
 /// Configuration for the mapper.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MapperConfig {
     /// Enable pitch shifting (can be computationally expensive)
     pub enable_pitch_shift: bool,
@@ -44,6 +45,7 @@ impl Default for MapperConfig {
 
 /// A mapped chop with timing and processing applied.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MappedChop {
     /// The processed audio samples
     pub samples: Vec<f32>,
@@ -98,6 +100,7 @@ impl Mapper {
     }
 
     /// Create with custom configuration.
+    #[allow(dead_code)]
     pub fn with_config(sample_rate: u32, config: MapperConfig) -> Self {
         Self {
             config,
@@ -106,6 +109,7 @@ impl Mapper {
     }
 
     /// Enable or disable pitch shifting.
+    #[allow(dead_code)]
     pub fn with_pitch_shift(mut self, enabled: bool) -> Self {
         self.config.enable_pitch_shift = enabled;
         self
@@ -114,6 +118,7 @@ impl Mapper {
     /// Enable/disable strength matching (JDilla style).
     /// When true, matches note velocity to chop strength.
     /// When false, matches by pitch proximity.
+    #[allow(dead_code)]
     pub fn with_strength_matching(mut self, enabled: bool) -> Self {
         self.config.strength_matching = enabled;
         self
@@ -154,7 +159,7 @@ impl Mapper {
     fn match_by_pitch(
         &self,
         note: &Note,
-        chops: &[Chop],
+        _chops: &[Chop],
         pitches: &[f32],
         pool: &[usize],
     ) -> usize {
@@ -398,6 +403,7 @@ impl Mapper {
     }
 
     /// Full render pipeline: chop → map → render.
+    #[allow(dead_code)]
     pub fn render(
         &self,
         sample: &[f32],
@@ -412,6 +418,7 @@ impl Mapper {
 }
 
 /// Simple resampling utility for sample rate conversion.
+#[allow(dead_code)]
 pub fn simple_resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();

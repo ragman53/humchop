@@ -59,7 +59,12 @@ fn main() -> Result<()> {
 
     match args.input {
         Some(input_path) => {
-            run_interactive(&input_path, args.output.as_ref(), args.pitch_shift, args.pitch_matching)?;
+            run_interactive(
+                &input_path,
+                args.output.as_ref(),
+                args.pitch_shift,
+                args.pitch_matching,
+            )?;
         }
         None => {
             // Show help
@@ -85,6 +90,7 @@ fn main() -> Result<()> {
 }
 
 #[cfg(feature = "audio-io")]
+#[allow(dead_code)]
 mod recorder_integration {
     use super::*;
     use crate::recorder::{list_input_devices, Recorder};
@@ -122,7 +128,10 @@ mod recorder_integration {
             duration_secs,
             sample_rate.to_string().yellow()
         );
-        println!("  {} JDilla-style chop mode (strength-based matching)", "•".dimmed());
+        println!(
+            "  {} JDilla-style chop mode (strength-based matching)",
+            "•".dimmed()
+        );
 
         // List available input devices
         let devices = list_input_devices();
@@ -133,6 +142,7 @@ mod recorder_integration {
         }
 
         // Initialize recorder
+        #[allow(unused_mut)]
         let mut recorder = Recorder::new();
 
         println!();
@@ -267,7 +277,11 @@ fn run_interactive(
     println!(
         "  {} JDilla-style: {}",
         "•".dimmed(),
-        if pitch_matching { "pitch matching" } else { "strength matching" }
+        if pitch_matching {
+            "pitch matching"
+        } else {
+            "strength matching"
+        }
     );
     println!(
         "  {} {}",
@@ -583,10 +597,7 @@ fn run_interactive(
     // Show playback hint
     println!();
     println!("{} {}", "→".cyan(), "🎧 Output Preview".bold());
-    println!(
-        "{}",
-        "Type 'p' to preview the output, 'q' to quit".dimmed()
-    );
+    println!("{}", "Type 'p' to preview the output, 'q' to quit".dimmed());
 
     // Offer to play the output
     loop {
@@ -661,7 +672,11 @@ fn run_interactive(
     println!(
         "  {} JDilla-style: {}",
         "•".dimmed(),
-        if pitch_matching { "pitch matching" } else { "strength matching" }
+        if pitch_matching {
+            "pitch matching"
+        } else {
+            "strength matching"
+        }
     );
 
     println!();

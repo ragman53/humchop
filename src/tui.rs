@@ -8,6 +8,8 @@
 //!
 //! Uses JDilla-style chopping by default (strength-based matching, chops keep original length).
 
+#![allow(dead_code)]
+
 use crate::audio_utils::{self, DEFAULT_SAMPLE_RATE};
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
@@ -15,7 +17,7 @@ use crate::mapper::{Mapper, MapperConfig};
 use crate::sample_chopper::SampleChopper;
 
 #[cfg(feature = "audio-io")]
-use crate::recorder::{calculate_audio_level, Recorder};
+use crate::recorder::Recorder;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::execute;
@@ -40,6 +42,7 @@ const MAX_RECORDING_DURATION_SECS: f64 = 15.0;
 
 /// Application state.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum AppState {
     /// Initial state, waiting for sample
     Idle,
@@ -64,6 +67,7 @@ impl Default for AppState {
 }
 
 /// Application-wide state.
+#[allow(dead_code)]
 pub struct App {
     /// Current state
     pub state: AppState,

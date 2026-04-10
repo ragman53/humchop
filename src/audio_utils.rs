@@ -16,6 +16,7 @@ use std::path::Path;
 use crate::error::HumChopError;
 
 /// Default sample rate for internal processing.
+#[allow(dead_code)]
 pub const DEFAULT_SAMPLE_RATE: u32 = 44100;
 
 /// Loads an audio file (WAV, MP3, or FLAC) and returns interleaved stereo/mono samples.
@@ -209,6 +210,7 @@ pub fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<()> {
 }
 
 /// Normalizes samples to have peak amplitude of 1.0 (in-place).
+#[allow(dead_code)]
 pub fn normalize(samples: &mut [f32]) {
     if samples.is_empty() {
         return;
@@ -228,6 +230,7 @@ pub fn normalize(samples: &mut [f32]) {
 }
 
 /// Resamples audio from one sample rate to another using linear interpolation.
+#[allow(dead_code)]
 pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
@@ -257,11 +260,10 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     fn create_test_wav(samples: &[f32], sample_rate: u32) -> NamedTempFile {
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
         let spec = WavSpec {

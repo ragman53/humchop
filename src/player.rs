@@ -3,6 +3,8 @@
 //! Provides audio preview functionality for loaded samples
 //! and generated output.
 
+#![allow(dead_code)]
+
 use crate::error::HumChopError;
 use rodio::{OutputStream, Sink};
 

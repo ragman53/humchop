@@ -3,6 +3,8 @@
 //! Records audio from the system microphone and streams samples
 //! via an mpsc channel to consumers (e.g., the TUI).
 
+#![allow(dead_code)]
+
 use crate::error::HumChopError;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -98,10 +100,9 @@ impl Recorder {
             }
         })?;
 
-        log::info!(
-            "Using input device: {}",
-            device_name.name().unwrap_or_default()
-        );
+        #[allow(deprecated)]
+        let device_name_str = device_name.name().unwrap_or_else(|_| "Unknown".into());
+        log::info!("Using input device: {}", device_name_str);
 
         // Get the default input config
         let config = device_name.default_input_config().map_err(|e| {
@@ -354,6 +355,7 @@ impl Default for Recorder {
 }
 
 /// Detect the available audio input devices.
+#[allow(deprecated)]
 pub fn list_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     match host.input_devices() {
