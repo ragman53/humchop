@@ -45,6 +45,12 @@ struct Args {
     /// Chop mode: 'equal' or 'onset'
     #[arg(short, long, value_name = "MODE", default_value = "equal")]
     chop_mode: String,
+
+    /// Mapping style: 'timestretch' or 'jdilla'
+    /// - timestretch: Chops stretched to match note duration (sounds like pitch-shifted playback)
+    /// - jdilla: Chops keep original length, play at note positions (classic hip-hop chop)
+    #[arg(long, value_name = "STYLE", default_value = "jdilla")]
+    style: String,
 }
 
 fn main() -> Result<()> {
@@ -68,6 +74,7 @@ fn main() -> Result<()> {
                 args.output.as_ref(),
                 args.pitch_shift,
                 &args.chop_mode,
+                &args.style,
             )?;
         }
         None => {
@@ -78,6 +85,11 @@ fn main() -> Result<()> {
             println!("  -o, --output <file>    Output file path");
             println!("  -m, --chop-mode <mode> Chop mode: 'equal' or 'onset'");
             println!("      --pitch-shift      Enable pitch shifting");
+            println!("  -s, --style <style>   Mapping style: 'jdilla' or 'timestretch'");
+            println!();
+            println!("Styles:");
+            println!("  jdilla       Chops keep original length (classic hip-hop chop)");
+            println!("  timestretch  Chops stretched to match note duration");
             println!();
             println!("Example:");
             println!("  humchop sample.wav");
@@ -251,6 +263,7 @@ fn run_interactive(
     output_path: Option<&PathBuf>,
     enable_pitch_shift: bool,
     chop_mode_str: &str,
+    style_str: &str,
 ) -> Result<()> {
     use crate::player::Player;
     use crate::recorder::Recorder;
@@ -289,6 +302,18 @@ fn run_interactive(
     let chop_mode = match chop_mode_str.to_lowercase().as_str() {
         "onset" => sample_chopper::ChopMode::Onset,
         _ => sample_chopper::ChopMode::Equal,
+    };
+
+    // Parse mapping style
+    let mapping_style = match style_str.to_lowercase().as_str() {
+        "jdilla" => {
+            println!("  {} Mapping style: JDilla (chops keep original length)", "•".dimmed());
+            mapper::MappingStyle::Jdilla
+        }
+        _ => {
+            println!("  {} Mapping style: TimeStretch (chops match note duration)", "•".dimmed());
+            mapper::MappingStyle::TimeStretch
+        }
     };
 
     println!(
@@ -563,6 +588,7 @@ fn run_interactive(
 
     let mut mapper_config = mapper::MapperConfig::default();
     mapper_config.enable_pitch_shift = enable_pitch_shift;
+    mapper_config.mapping_style = mapping_style;
     let mapper = mapper::Mapper::with_config(sample_rate, mapper_config);
 
     let mapped_chops = mapper
@@ -654,6 +680,7 @@ fn run_interactive(
     output_path: Option<&PathBuf>,
     enable_pitch_shift: bool,
     chop_mode_str: &str,
+    _style_str: &str,
 ) -> Result<()> {
     // Validate input file exists
     if !input_path.exists() {
@@ -687,6 +714,18 @@ fn run_interactive(
     let chop_mode = match chop_mode_str.to_lowercase().as_str() {
         "onset" => sample_chopper::ChopMode::Onset,
         _ => sample_chopper::ChopMode::Equal,
+    };
+
+    // Parse mapping style
+    let mapping_style = match _style_str.to_lowercase().as_str() {
+        "jdilla" => {
+            println!("  {} Mapping style: JDilla (chops keep original length)", "•".dimmed());
+            mapper::MappingStyle::Jdilla
+        }
+        _ => {
+            println!("  {} Mapping style: TimeStretch (chops match note duration)", "•".dimmed());
+            mapper::MappingStyle::TimeStretch
+        }
     };
 
     println!(
@@ -736,6 +775,7 @@ fn run_interactive(
 
     let mut mapper_config = mapper::MapperConfig::default();
     mapper_config.enable_pitch_shift = enable_pitch_shift;
+    mapper_config.mapping_style = mapping_style;
     let mapper = mapper::Mapper::with_config(sample_rate, mapper_config);
 
     let mapped_chops = mapper
