@@ -10,6 +10,7 @@
 ### ✅ audio_utils.rs
 - [x] `load_audio()` - WAV/MP3/FLAC loading via symphonia
 - [x] `write_wav()` - WAV output via hound
+- [x] `write_wav_with_options()` - WAV with configurable options (v0.1.3)
 - [x] `normalize()` - Peak normalization
 - [x] `resample()` - Sample rate conversion
 - [x] `to_mono()` - Channel to mono conversion
@@ -28,7 +29,7 @@
 - [x] `#[derive(Default)]` for `PitchAlgorithm`
 - [x] Unit tests
 
-### ✅ sample_chopper.rs (v0.3.0 - Improved)
+### ✅ sample_chopper.rs (v0.1.2 - Improved)
 - [x] Pre-emphasis filter (high-frequency boost)
 - [x] Multi-band onset strength (RMS + full-band flux + high-flux + mid-flux)
 - [x] Median-based normalization (sliding MAD scaling)
@@ -49,7 +50,8 @@
 - [x] `apply_velocity_gain()` - Velocity-based gain
 - [x] `process()` - Full mapping pipeline
 - [x] `render_output()` - Final audio rendering
-- [x] Unit tests
+- [x] `soft_knee_compress()` - Tanh-based soft clipping (v0.1.3)
+- [x] Unit tests (44 total)
 
 ### ✅ recorder.rs
 - [x] cpal microphone recording
@@ -79,6 +81,10 @@
 - [x] Demo mode for testing without microphone
 - [x] Full recording workflow
 - [x] Error handling and user feedback
+- [x] `--no-tui` headless mode (v0.1.3)
+- [x] `--num-chops` for custom chop count (v0.1.3)
+- [x] `--dither` for triangular noise dithering (v0.1.3)
+- [x] `--bits` for configurable bit depth (v0.1.3)
 
 ---
 
@@ -89,7 +95,7 @@
 - [x] Notes + Chops → Mapper → Final audio
 - [x] Final audio → write_wav → output file
 - [x] End-to-end test with demo notes
-- [x] **40 unit tests passing**
+- [x] **44 unit tests passing**
 
 ---
 
@@ -106,7 +112,13 @@
 
 ## Quality Fixes Applied
 
-### v0.3.0 - Chopping Quality
+### v0.1.3 - Output Quality & Headless
+1. **Headless Mode** - `--no-tui` and `--num-chops` for scripting
+2. **Dithering** - TPDF triangular noise dithering for 16/24-bit
+3. **Bit Depth** - `--bits` for 16/24/32-bit output
+4. **Soft-Knee Compression** - Tanh-based with 6dB knee
+
+### v0.1.2 - Chopping Quality
 1. **Pre-Emphasis Filter** - High-frequency boost prevents bass masking
 2. **Multi-Band Detection** - Full-band + high-flux + mid-flux for all content types
 3. **MAD Normalization** - Sliding median replaces naive mean threshold
@@ -122,17 +134,9 @@
 
 ---
 
-## Remaining Clippy Warnings (Non-Critical)
+## Remaining Clippy Warnings
 
-These are in non-chopper modules and don't affect functionality:
-
-- [ ] `mapper.rs:287` - needless_range_loop in `apply_fade()` (cosmetic)
-- [ ] `recorder.rs:388` - manual_clamp in `calculate_audio_level()` (cosmetic)
-- [ ] `tui.rs:538` - unnecessary_cast in `render_recording_content()` (cosmetic)
-- [ ] `tui.rs:632` - option_as_ref_deref in `render_error_content()` (cosmetic)
-- [ ] `main.rs:100` - ptr_arg `&PathBuf` vs `&Path` (cosmetic)
-- [ ] `main.rs:231` - while_let_loop in drain loop (cosmetic)
-- [ ] `main.rs:343,555` - field_reassign_with_default (cosmetic)
+**All 10 clippy warnings resolved in v0.1.3** ✅
 
 ---
 
@@ -144,14 +148,14 @@ These improvements have the biggest impact on the user's end result:
 
 1. **Crossfade between chops** — Currently 5ms gaps between chops; smooth crossfade would eliminate any remaining click artifacts and create a more polished output
 2. **Rubato resampling in mapper** — Replace `linear_resample()` with `rubato::SincResampler` for higher-quality pitch shifting (linear interpolation introduces aliasing artifacts)
-3. **Soft-knee compression on output** — Prevent clipping when multiple chops overlap during rendering; a simple lookahead compressor would keep output peaks below 0dBFS
-4. **Dithering for 16-bit output** — Optional dither when writing output to reduce quantization noise
+3. ✅ **Soft-knee compression on output** — Prevent clipping when multiple chops overlap during rendering (v0.1.3)
+4. ✅ **Dithering for 16-bit output** — Optional dither when writing output to reduce quantization noise (v0.1.3)
 
 ### Medium Priority — Workflow
 
 These make the tool easier to use and debug:
 
-5. **`--no-tui` headless mode** — Add a `--no-tui` flag for scripting/batch processing; useful for producers who want to automate the pipeline
+5. ✅ **`--no-tui` headless mode** — Add a `--no-tui` flag for scripting/batch processing (v0.1.3)
 6. **Chop preview in TUI** — Let users preview individual chops before processing (`1-9` keys to hear each chop); helps verify transient detection quality
 7. **Waveform visualization** — Simple ASCII waveform in TUI showing chop boundaries; gives visual feedback on where chops land
 8. **Batch processing** — Process multiple samples at once from a directory; `humchop ./drums/*.wav --batch`

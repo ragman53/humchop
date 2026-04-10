@@ -2,20 +2,30 @@
 
 ## Current Status
 
-### ✅ v0.3.0 - Current Release
+### ✅ v0.1.3 - Current Release
 
 **Milestones Completed:**
-- [x] All 40 unit tests passing
+- [x] All 44 unit tests passing
 - [x] JDilla-style chopping only (single mode)
 - [x] Strength-based matching (default)
 - [x] Pitch-based matching (optional)
 - [x] Click noise prevention (fade in/out)
 - [x] Audio recording normalization fixed
 - [x] Chop count consistency (loop limits)
-- [x] All Clippy warnings resolved
-- [x] Updated documentation (README, SPEC.md, TESTING.md)
+- [x] All Clippy warnings resolved (0 warnings)
+- [x] Updated documentation (README, SPEC.md, TESTING.md, PLAN.md)
 
-**Chopping Quality Improvements (v0.3.0):**
+**Headless Mode (v0.1.3):**
+- [x] `--no-tui` for scripting/batch processing
+- [x] `--num-chops` for custom chop count
+
+**Output Quality (v0.1.3):**
+- [x] `--dither` for triangular noise dithering
+- [x] `--bits` for configurable bit depth (16/24/32)
+- [x] Soft-knee compression (enabled by default)
+- [x] Tanh-based soft saturation with 6dB knee
+
+**Chopping Quality (v0.1.2):**
 - [x] Pre-emphasis filter (high-frequency boost)
 - [x] Multi-band onset detection (full-band + high-flux + mid-flux)
 - [x] Median-based normalization (MAD scaling)
@@ -28,14 +38,20 @@
 
 ## Version History
 
-### v0.3.0 (Current - 2026-04-10)
+### v0.1.3 (Current - 2026-04-10)
+- **Headless Mode**: `--no-tui` and `--num-chops` for scripting
+- **Dithering**: `--dither` with TPDF (Triangular Probability Density Function)
+- **Bit Depth**: `--bits` for 16/24/32-bit output
+- **Soft-Knee Compression**: tanh-based saturation with 6dB knee, enabled by default
+- **Code Quality**: All 10 clippy warnings fixed
+
+### v0.1.2 (Previous)
 - **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1])
 - **Multi-Band Onset Detection**: Full-band + high-flux (3kHz+) + mid-flux (300Hz–3kHz)
 - **Median-Based Normalization**: Sliding window with MAD scaling
 - **Peak Picking with Prominence**: 3-pass algorithm for precise boundary placement
 - **Multi-Scale Energy Splitting**: 5 frame sizes for optimal fallback splits
 - **Integrated Strength Scoring**: 60% mean + 40% peak over chop region
-- **Tighter Defaults**: 2048 FFT window, 30ms min chop, 0.4 energy weight
 
 ### v0.2.0 (2026-04-10)
 - **Single JDilla Mode**: Removed TimeStretch, simplified API
@@ -57,10 +73,10 @@
 
 ### Cleanup
 - [x] Remove unused imports
-- [x] Fix Clippy warnings
+- [x] Fix Clippy warnings (10 → 0)
 - [ ] Add rustdoc comments for public APIs
 - [ ] Benchmark pitch detection accuracy
-- [ ] Resolve remaining clippy warnings in non-chopper modules (mapper fade loop, tui patterns)
+- [x] Clippy warnings in non-chopper modules resolved
 
 ### Performance
 - [ ] Parallel FFT for onset detection
@@ -94,15 +110,15 @@
 - [ ] Crossfade between chops (currently 5ms gaps)
 - [ ] ADSR envelope on each chop
 - [ ] High-quality resampling via rubato (replace linear interpolation in mapper)
-- [ ] Soft-knee compression on output to prevent clipping
-- [ ] Optional dithering for 16-bit output
+- [x] Soft-knee compression on output to prevent clipping (v0.1.3)
+- [x] Optional dithering for 16-bit output (v0.1.3)
 
 ### Phase 2: Workflow Improvements
 - [ ] Waveform visualization in TUI
 - [ ] Preview individual chops before processing
 - [ ] Undo/redo support in TUI
 - [ ] Batch processing mode (multiple samples at once)
-- [ ] `--no-tui` headless CLI mode for scripting
+- [x] `--no-tui` headless CLI mode for scripting (v0.1.3)
 
 ### Phase 3: Enhanced Features
 - [ ] Basic Pitch (ONNX) for higher hum accuracy
@@ -134,7 +150,7 @@
 | Metric | Value |
 |--------|-------|
 | Source Files | 9 |
-| Unit Tests | 40 |
-| Clippy Warnings | 0 (core), 10 (other modules) |
-| Rust Source Lines | ~3200 |
+| Unit Tests | 44 |
+| Clippy Warnings | 0 |
+| Rust Source Lines | ~3500 |
 | Dependencies | 16 |

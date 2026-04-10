@@ -67,6 +67,9 @@ Two matching modes:
 **7. Output**
 - WAV file generation: `output_chopped_{timestamp}.wav`
 - Fade in/out applied to prevent clicks (~5ms)
+- Configurable bit depth: 16, 24, or 32 (default: 32)
+- Optional dithering for lower bit depths
+- Soft-knee compression to prevent harsh clipping (enabled by default)
 
 ### 2.2 Error Handling
 

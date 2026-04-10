@@ -49,6 +49,25 @@ cargo run -- sample.wav -o my_chops.wav
 | `-o, --output <FILE>` | Output file path |
 | `--pitch-shift` | Enable pitch shifting |
 | `--pitch-matching` | Match notes by pitch instead of strength |
+| `--no-tui` | Run headless (no TUI, uses demo notes) |
+| `--num-chops <N>` | Number of chops in headless mode (default: 16) |
+| `--dither` | Enable dithering for reduced quantization noise |
+| `--bits <BITS>` | Output bit depth: 16, 24, or 32 (default: 32) |
+
+### Headless Mode
+
+For scripting, batch processing, or quick testing without microphone:
+
+```bash
+# Process with demo notes, no TUI
+humchop sample.wav --no-tui
+
+# Custom chop count
+humchop sample.wav --no-tui --num-chops 8
+
+# 16-bit output with dithering (smaller file size)
+humchop sample.wav --no-tui --bits 16 --dither -o output.wav
+```
 
 ### TUI Mode (with audio-io feature)
 
@@ -162,10 +181,45 @@ let output = mapper.render_output(&mapped);
 | `enable_pitch_shift` | false | Apply pitch correction |
 | `strength_matching` | true | Match by strength (not pitch) |
 | `crossfade_samples` | 256 | Crossfade length for transitions |
+| `soft_clip` | true | Enable soft-knee compression |
+| `soft_clip_threshold_db` | -1.0 | Soft clip threshold (dB) |
 
 ## Changelog
 
-### v0.3.0 (Current)
+### v0.1.3 (Current)
+
+#### Headless Mode
+- **`--no-tui`**: Run without TUI for scripting/batch processing
+- **`--num-chops <N>`**: Specify number of chops (default: 16)
+
+#### Output Quality
+- **`--dither`**: Enable triangular noise dithering for 16/24-bit output
+- **`--bits <BITS>`**: Output bit depth (16, 24, or 32; default: 32)
+- **Soft-knee compression**: Enabled by default to prevent harsh clipping
+- Uses tanh-based soft saturation with 6dB knee
+- Preserves dynamics better than hard clipping
+
+#### Code Quality
+- Fixed all Clippy warnings (10 → 0)
+- Added 4 new tests for soft-knee compression
+- Total tests: 44 passing
+
+---
+
+### v0.1.2 (Previous)
+
+#### Chopping Quality Improvements
+- **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1]) prevents bass masking of transients
+- **Multi-Band Onset Detection**: Full-band + high-flux (3kHz+) + mid-flux (300Hz–3kHz) for accurate detection across all content
+- **Median-Based Normalization**: Sliding MAD scaling replaces naive mean threshold — consistent detection across loud and quiet sections
+- **Peak Picking with Prominence**: 3-pass algorithm (local maxima → prominence → non-maximum suppression) — only meaningful transients selected
+- **Multi-Scale Energy Splitting**: Fallback tries 5 frame sizes (64/128/256/512/1024) — picks optimal split by energy contrast
+- **Integrated Strength Scoring**: 60% mean + 40% peak of onset energy over entire chop region — accurate mapper scores
+
+#### Configuration Changes
+- FFT window: 1024 → 2048 (better frequency resolution)
+- Min chop: 50ms → 30ms (catches faster transients)
+- Energy weight: 0.6 → 0.4 (more spectral-driven for musical content)
 
 #### Chopping Quality Improvements
 - **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1]) prevents bass masking of transients
@@ -207,7 +261,7 @@ let output = mapper.render_output(&mapped);
 - Core JDilla-style chopping
 - Demo mode for testing
 - TUI framework
-- 40 unit tests passing
+- 44 unit tests passing
 
 ## Testing
 
