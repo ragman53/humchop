@@ -859,6 +859,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hound",
+ "log",
  "pitch-detection",
  "ratatui",
  "rodio",

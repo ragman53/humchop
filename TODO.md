@@ -114,12 +114,12 @@ Based on SPEC.md specifications, this document tracks implementation status.
 - [x] `q` key exits cleanly
 - [x] Sample path displayed in UI
 
-### ⚠️ Day 3: Microphone Recording (Partial - Requires System Audio)
+### ✅ Day 3: Microphone Recording (Complete)
 - [x] TUI recording UI (display, level meter placeholder)
 - [x] cpal microphone input infrastructure (feature flag)
-- [ ] `r` key toggles actual recording (requires cpal with pulseaudio)
-- [ ] Recording buffer sent via `mpsc` channel to TUI
-- [ ] Error handling for missing microphone
+- [x] `r` key toggles actual recording (cpal with pulseaudio)
+- [x] Recording buffer sent via mpsc channel to TUI
+- [x] Error handling for missing microphone
 
 ### ✅ Day 4: Pitch & Onset Detection
 - [x] `hum_analyzer.rs`: YIN pitch detection

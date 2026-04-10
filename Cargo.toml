@@ -18,6 +18,7 @@ core-only = []
 # CLI
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
+log = "0.4"
 
 # Audio file I/O (no system dependencies)
 hound = "3.5"

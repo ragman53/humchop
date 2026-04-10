@@ -12,6 +12,9 @@ use crate::hum_analyzer::{HumAnalyzer, Note};
 use crate::mapper::Mapper;
 use crate::sample_chopper::ChopMode;
 
+#[cfg(feature = "audio-io")]
+use crate::recorder::{calculate_audio_level, Recorder};
+
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -26,6 +29,12 @@ use ratatui::{
 use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[cfg(feature = "audio-io")]
+use tokio::sync::mpsc as tokio_mpsc;
+
+/// Maximum recording duration in seconds.
+const MAX_RECORDING_DURATION_SECS: f64 = 15.0;
 
 /// Application state.
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +91,12 @@ pub struct App {
     pub audio_level: f32,
     /// Quit flag
     pub should_quit: bool,
+    /// Audio recorder (only available with audio-io feature)
+    #[cfg(feature = "audio-io")]
+    pub recorder: Option<Recorder>,
+    /// Audio receiver channel (only available with audio-io feature)
+    #[cfg(feature = "audio-io")]
+    pub audio_receiver: Option<tokio_mpsc::Receiver<Vec<f32>>>,
 }
 
 impl App {
@@ -102,6 +117,10 @@ impl App {
             chop_mode: ChopMode::Equal,
             audio_level: 0.0,
             should_quit: false,
+            #[cfg(feature = "audio-io")]
+            recorder: None,
+            #[cfg(feature = "audio-io")]
+            audio_receiver: None,
         }
     }
 
@@ -121,7 +140,44 @@ impl App {
     }
 
     /// Start recording.
+    #[cfg(feature = "audio-io")]
     pub fn start_recording(&mut self) {
+        if self.state != AppState::Ready {
+            return;
+        }
+
+        // Initialize recorder if not already done
+        if self.recorder.is_none() {
+            self.recorder = Some(Recorder::new());
+        }
+
+        // Start recording and get receiver
+        let recorder = match self.recorder.as_mut() {
+            Some(r) => r,
+            None => {
+                self.set_error("Failed to initialize recorder".to_string());
+                return;
+            }
+        };
+
+        match recorder.start_recording() {
+            Ok(receiver) => {
+                self.audio_receiver = Some(receiver);
+                self.state = AppState::Recording;
+                self.recording_start = Some(Instant::now());
+                self.hum_data = Some(Vec::new());
+                self.audio_level = 0.0;
+                log::info!("Recording started");
+            }
+            Err(e) => {
+                self.set_error(format!("Failed to start recording: {}", e));
+            }
+        }
+    }
+
+    #[cfg(not(feature = "audio-io"))]
+    pub fn start_recording(&mut self) {
+        // Without audio-io, just simulate recording
         if self.state != AppState::Ready {
             return;
         }
@@ -133,6 +189,31 @@ impl App {
     }
 
     /// Stop recording and process.
+    #[cfg(feature = "audio-io")]
+    pub fn stop_recording(&mut self) {
+        if self.state != AppState::Recording {
+            return;
+        }
+
+        // Stop the recorder
+        if let Some(ref mut recorder) = self.recorder {
+            recorder.stop_recording();
+        }
+        self.audio_receiver = None;
+
+        self.recording_duration = self
+            .recording_start
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
+        log::info!(
+            "Recording stopped, duration: {:.2}s",
+            self.recording_duration
+        );
+        self.process_hum();
+    }
+
+    #[cfg(not(feature = "audio-io"))]
     pub fn stop_recording(&mut self) {
         if self.state != AppState::Recording {
             return;
@@ -148,17 +229,26 @@ impl App {
 
     /// Process recorded hum data.
     fn process_hum(&mut self) {
-        if self.hum_data.is_none() || self.sample.is_none() {
-            self.state = AppState::Error;
-            self.error_message = Some("No recording data".to_string());
-            return;
-        }
+        let hum_samples = match self.hum_data.take() {
+            Some(s) => s,
+            None => {
+                self.state = AppState::Error;
+                self.error_message = Some("No recording data".to_string());
+                return;
+            }
+        };
+
+        let sample = match self.sample.clone() {
+            Some(s) => s,
+            None => {
+                self.state = AppState::Error;
+                self.error_message = Some("No sample loaded".to_string());
+                return;
+            }
+        };
 
         self.state = AppState::Processing;
         self.processing_progress = 0.0;
-
-        let hum_samples = self.hum_data.take().unwrap();
-        let sample = self.sample.clone().unwrap();
 
         // Analyze pitch
         self.processing_progress = 0.2;
