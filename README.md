@@ -157,7 +157,7 @@ let output = mapper.render_output(&mapped);
 
 ## Spec Changes Log
 
-### v0.2.0 (Current)
+### v0.3.0 (Current)
 
 Based on code review feedback, the following changes were made:
 
