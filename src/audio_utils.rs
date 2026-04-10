@@ -209,6 +209,151 @@ pub fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<()> {
     Ok(())
 }
 
+/// WAV output options for controlling bit depth and dithering.
+#[derive(Debug, Clone, Default)]
+pub struct WavOptions {
+    /// Bit depth for output (16, 24, or 32). Defaults to 32.
+    pub bits_per_sample: u16,
+    /// Enable dithering for lower bit depths (16, 24).
+    /// Dithering reduces quantization noise by adding shaped noise.
+    pub dither: bool,
+}
+
+impl WavOptions {
+    /// Create new options with default settings (32-bit float).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set bit depth (16, 24, or 32).
+    pub fn bits_per_sample(mut self, bits: u16) -> Self {
+        self.bits_per_sample = bits.min(32);
+        self
+    }
+
+    /// Enable dithering.
+    pub fn dither(mut self, enable: bool) -> Self {
+        self.dither = enable;
+        self
+    }
+}
+
+/// Apply triangular noise dithering (TPDF).
+/// This adds noise with a triangular probability distribution, which is optimal
+/// for reducing quantization artifacts at lower bit depths.
+fn apply_dither(samples: &mut [f32], bits: u16) {
+    if bits >= 32 || samples.is_empty() {
+        return;
+    }
+
+    // LSB weight for the target bit depth
+    let lsb_weight = 2.0_f32.powf(-(bits as f32));
+
+    // Simple pseudo-random using xorshift
+    let mut state = 123456789u32;
+    let mut next_state = || {
+        state ^= state.rotate_left(13);
+        state ^= state.rotate_right(17);
+        state ^= state.rotate_left(5);
+        state
+    };
+
+    // Triangular PDF: sum of two uniform random values gives triangular distribution
+    for sample in samples.iter_mut() {
+        let r1 = (next_state() as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        let r2 = (next_state() as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        let dither = (r1 + r2) * lsb_weight * 0.5;
+        *sample = (*sample + dither).clamp(-1.0, 1.0);
+    }
+}
+
+/// Writes samples to a WAV file with specified options.
+///
+/// Supports different bit depths (16, 24, 32) and optional dithering.
+/// For 32-bit float, no quantization is needed.
+/// For 16/24-bit integer output, samples are quantized and dithering can be applied.
+pub fn write_wav_with_options(
+    path: &Path,
+    samples: &[f32],
+    sample_rate: u32,
+    options: &WavOptions,
+) -> Result<()> {
+    if samples.is_empty() {
+        return Err(HumChopError::InvalidAudio("No samples to write".to_string()).into());
+    }
+
+    let bits = options.bits_per_sample.min(32);
+
+    // Quantize and dither if needed
+    let mut output_samples = samples.to_vec();
+
+    if bits < 32 && options.dither {
+        apply_dither(&mut output_samples, bits);
+    }
+
+    match bits {
+        16 | 24 => {
+            // Integer output (16 or 24 bit)
+            let spec = WavSpec {
+                channels: 1,
+                sample_rate,
+                bits_per_sample: bits,
+                sample_format: hound::SampleFormat::Int,
+            };
+
+            let mut writer = WavWriter::create(path, spec).map_err(|e| {
+                HumChopError::EncodeError(format!("Failed to create WAV file: {}", e))
+            })?;
+
+            let max_val = (1i64 << (bits - 1)) as f32;
+
+            for &sample in &output_samples {
+                let quantized = (sample.clamp(-1.0, 1.0) * max_val).round() as i32;
+                match bits {
+                    16 => writer.write_sample(quantized as i16).map_err(|e| {
+                        HumChopError::EncodeError(format!("Failed to write sample: {}", e))
+                    })?,
+                    24 => writer
+                        .write_sample(quantized) // hound handles 24-bit as i32
+                        .map_err(|e| {
+                            HumChopError::EncodeError(format!("Failed to write sample: {}", e))
+                        })?,
+                    _ => unreachable!(),
+                }
+            }
+
+            writer.finalize().map_err(|e| {
+                HumChopError::EncodeError(format!("Failed to finalize WAV file: {}", e))
+            })?;
+        }
+        _ => {
+            // 32-bit float output
+            let spec = WavSpec {
+                channels: 1,
+                sample_rate,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            };
+
+            let mut writer = WavWriter::create(path, spec).map_err(|e| {
+                HumChopError::EncodeError(format!("Failed to create WAV file: {}", e))
+            })?;
+
+            for &sample in &output_samples {
+                writer.write_sample(sample).map_err(|e| {
+                    HumChopError::EncodeError(format!("Failed to write sample: {}", e))
+                })?;
+            }
+
+            writer.finalize().map_err(|e| {
+                HumChopError::EncodeError(format!("Failed to finalize WAV file: {}", e))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Normalizes samples to have peak amplitude of 1.0 (in-place).
 #[allow(dead_code)]
 pub fn normalize(samples: &mut [f32]) {

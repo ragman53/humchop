@@ -55,6 +55,16 @@ struct Args {
     /// Defaults to 16 if not specified.
     #[arg(long, value_name = "NUM", default_value = "16")]
     num_chops: Option<usize>,
+
+    /// Enable dithering for reduced quantization noise.
+    /// Recommended for 16-bit output to minimize artifacts.
+    #[arg(long)]
+    dither: bool,
+
+    /// Output bit depth: 16, 24, or 32 (default: 32).
+    /// 16-bit produces smaller files; 32-bit is lossless.
+    #[arg(long, value_name = "BITS", default_value = "32")]
+    bits: Option<u16>,
 }
 
 fn main() -> Result<()> {
@@ -82,6 +92,8 @@ fn main() -> Result<()> {
                     args.pitch_matching,
                     args.segment.as_deref(),
                     args.num_chops,
+                    args.dither,
+                    args.bits.unwrap_or(32),
                 )?;
             } else {
                 run_interactive(
@@ -103,6 +115,8 @@ fn main() -> Result<()> {
             println!("      --pitch-matching   Match by pitch instead of strength");
             println!("      --no-tui           Run headless (no TUI, demo notes)");
             println!("      --num-chops <N>    Number of chops (default: 16)");
+            println!("      --dither           Enable dithering (for 16/24-bit output)");
+            println!("      --bits <BITS>      Output bit depth: 16, 24, or 32 (default: 32)");
             println!();
             println!("JDilla-style mode:");
             println!("  - Chops keep original length (classic hip-hop chop)");
@@ -535,6 +549,7 @@ fn run_interactive(
 
 /// Run in headless mode with demo notes (no TUI).
 /// Useful for scripting, batch processing, or quick testing.
+#[allow(clippy::too_many_arguments)]
 fn run_headless(
     input_path: &Path,
     output_path: Option<&Path>,
@@ -542,6 +557,8 @@ fn run_headless(
     pitch_matching: bool,
     _segment: Option<&str>,
     num_chops: Option<usize>,
+    enable_dither: bool,
+    bits: u16,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -626,10 +643,19 @@ fn run_headless(
         PathBuf::from(format!("output_chopped_{}.wav", timestamp))
     });
 
+    // Create WAV options
+    let wav_options = audio_utils::WavOptions::new()
+        .bits_per_sample(bits)
+        .dither(enable_dither);
+
+    if bits < 32 {
+        println!("  • Output: {}-bit{}", bits, if enable_dither { " + dither" } else { "" });
+    }
+
     println!();
     println!("→ Writing: {}", out_path.display().to_string().white());
 
-    audio_utils::write_wav(&out_path, &output, sample_rate)?;
+    audio_utils::write_wav_with_options(&out_path, &output, sample_rate, &wav_options)?;
 
     let elapsed = start.elapsed();
     println!();
