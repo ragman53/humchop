@@ -304,7 +304,11 @@ fn run_interactive(
 
         // Print elapsed time
         let elapsed = recording_start.elapsed().as_secs_f64();
-        print!("\r🔴 {:.1}s / {:.1}s ", elapsed.min(MAX_RECORDING_DURATION_SECS), MAX_RECORDING_DURATION_SECS);
+        print!(
+            "\r🔴 {:.1}s / {:.1}s ",
+            elapsed.min(MAX_RECORDING_DURATION_SECS),
+            MAX_RECORDING_DURATION_SECS
+        );
         io::stdout().flush().ok();
     }
 
@@ -433,7 +437,11 @@ fn run_interactive(
             println!("  ⚠️  Failed to save chop {}: {}", i, e);
         }
     }
-    println!("  💾 Saved {} chops to {}/debug_chop_XX.wav", chops.len(), output_dir.display());
+    println!(
+        "  💾 Saved {} chops to {}/debug_chop_XX.wav",
+        chops.len(),
+        output_dir.display()
+    );
 
     let mapper = mapper::Mapper::with_config(
         sample_rate,
@@ -461,7 +469,11 @@ fn run_interactive(
             println!("  ⚠️  Failed to save mapped chop {}: {}", i, e);
         }
     }
-    println!("  💾 Saved {} mapped chops to {}/debug_mapped_XX.wav", mapped_chops.len(), output_dir.display());
+    println!(
+        "  💾 Saved {} mapped chops to {}/debug_mapped_XX.wav",
+        mapped_chops.len(),
+        output_dir.display()
+    );
     let output = mapper.render_output(&mapped_chops);
 
     // Generate output filename (use provided path or create in output_dir)
@@ -556,10 +568,7 @@ fn run_interactive(
     let target_num_chops = 16;
     // BUG-5 fix: demo notes scale to match sample duration + target chop count
     let demo_notes = generate_demo_notes(target_num_chops, demo_duration);
-    println!(
-        "  • Demo notes ({})",
-        demo_notes.len()
-    );
+    println!("  • Demo notes ({})", demo_notes.len());
 
     // Process
     let chopper = sample_chopper::SampleChopper::new(sample_rate);
@@ -649,9 +658,7 @@ fn run_batch(
                     let ext_lower = ext.to_string_lossy().to_lowercase();
                     // DESIGN-6 fix: specific pattern wins; wildcard/empty falls back to audio formats only
                     if pattern == "*" || pattern.replace("*", "").is_empty() {
-                        ext_lower == "wav"
-                            || ext_lower == "mp3"
-                            || ext_lower == "flac"
+                        ext_lower == "wav" || ext_lower == "mp3" || ext_lower == "flac"
                     } else {
                         let pattern_ext = pattern.replace("*", "").to_lowercase();
                         ext_lower == pattern_ext
@@ -876,10 +883,7 @@ fn run_headless(
     let target_num_chops = num_chops.unwrap_or(16);
     // BUG-5 fix: demo notes scale to match sample duration + target chop count
     let demo_notes = generate_demo_notes(target_num_chops, max_duration);
-    println!(
-        "  • Demo notes ({})",
-        demo_notes.len()
-    );
+    println!("  • Demo notes ({})", demo_notes.len());
     println!("  • Target chops: {}", target_num_chops);
 
     // Process
@@ -982,10 +986,7 @@ fn run_demo_mode(
 
     let demo_duration = MAX_DEMO_DURATION_SECS;
     let demo_notes = generate_demo_notes(4, demo_duration);
-    println!(
-        "  • Demo notes ({})",
-        demo_notes.len()
-    );
+    println!("  • Demo notes ({})", demo_notes.len());
 
     // For demo, trim to 10 seconds and use 16 chops
     let demo_duration = MAX_DEMO_DURATION_SECS;
