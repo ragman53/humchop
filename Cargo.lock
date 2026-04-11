@@ -847,7 +847,7 @@ checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "humchop"
-version = "0.4.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",

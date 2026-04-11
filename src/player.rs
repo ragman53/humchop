@@ -195,11 +195,15 @@ impl Player {
         Ok(())
     }
 
-    /// Stop playback.
+    /// Stop playback immediately.
+    ///
+    /// MINOR-5 fix: uses sink.stop() instead of sink.detach().
+    /// sink.detach() hands ownership to rodio's background thread (keeps playing);
+    /// sink.stop() stops the sink immediately and clears queued audio.
     pub fn stop(&mut self) {
-        // Detach sink to stop playback
         if let Some(sink) = self.sink.take() {
-            sink.detach();
+            sink.stop(); // Stop immediately (correct)
+            sink.detach(); // Detach from stream
         }
         self.stream = None;
         self.sink = None;

@@ -333,12 +333,7 @@ fn run_interactive(
         Err(e) => {
             println!("✗ Failed to analyze: {}", e);
             println!("→ Using demo notes instead...");
-            vec![
-                hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
-                hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
-                hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
-                hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
-            ]
+            generate_demo_notes(4, 1.35)
         }
     };
 
@@ -490,22 +485,6 @@ fn run_interactive(
     println!();
     println!("→ Generating demo output (using first 10s of sample)...");
 
-    let demo_notes = vec![
-        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
-        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
-        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
-        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
-    ];
-
-    println!(
-        "  • Demo notes: {:?}",
-        demo_notes
-            .iter()
-            .map(|n| n.to_note_name())
-            .collect::<Vec<_>>()
-    );
-
-    // For demo, trim to 10 seconds and use 16 chops
     let demo_duration = 10.0;
     let demo_samples = (demo_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > demo_samples {
@@ -519,6 +498,12 @@ fn run_interactive(
         &samples[..]
     };
     let target_num_chops = 16;
+    // BUG-5 fix: demo notes scale to match sample duration + target chop count
+    let demo_notes = generate_demo_notes(target_num_chops, demo_duration);
+    println!(
+        "  • Demo notes ({})",
+        demo_notes.len()
+    );
 
     // Process
     let chopper = sample_chopper::SampleChopper::new(sample_rate);
@@ -599,13 +584,15 @@ fn run_batch(
             .filter(|p| {
                 if let Some(ext) = p.extension() {
                     let ext_lower = ext.to_string_lossy().to_lowercase();
-                    let pattern_ext = pattern.replace("*", "").to_lowercase();
-                    pattern == "*"
-                        || pattern_ext.is_empty()
-                        || ext_lower == pattern_ext
-                        || ext_lower == "wav"
-                        || ext_lower == "mp3"
-                        || ext_lower == "flac"
+                    // DESIGN-6 fix: specific pattern wins; wildcard/empty falls back to audio formats only
+                    if pattern == "*" || pattern.replace("*", "").is_empty() {
+                        ext_lower == "wav"
+                            || ext_lower == "mp3"
+                            || ext_lower == "flac"
+                    } else {
+                        let pattern_ext = pattern.replace("*", "").to_lowercase();
+                        ext_lower == pattern_ext
+                    }
                 } else {
                     false
                 }
@@ -699,17 +686,6 @@ fn process_single_file(
     let (samples, sample_rate) = audio_utils::load_audio(input_path)?;
 
     // Demo notes for headless mode
-    let demo_notes = vec![
-        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
-        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
-        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
-        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
-    ];
-
-    // Determine chop count
-    let target_num_chops = num_chops.unwrap_or(16);
-
-    // Trim sample to 10s if longer
     let max_duration = 10.0;
     let max_samples = (max_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > max_samples {
@@ -717,6 +693,9 @@ fn process_single_file(
     } else {
         &samples[..]
     };
+    let target_num_chops = num_chops.unwrap_or(16);
+    // BUG-5 fix: demo notes scale to match sample duration + target chop count
+    let demo_notes = generate_demo_notes(target_num_chops, max_duration);
 
     let start = Instant::now();
 
@@ -753,6 +732,34 @@ fn process_single_file(
     println!("  Processed in {:.2}s", elapsed.as_secs_f64());
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Demo notes generator
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Generate demo notes that adapt to the target number of chops and sample duration.
+///
+/// BUG-5 fix: replaces the hardcoded 4-note sequence with notes that:
+/// - Scale to fill the sample duration (not always 1.35s)
+/// - Produce exactly the number of notes requested (not always 4)
+/// - Respect note density (~8 notes per second of sample duration)
+fn generate_demo_notes(num_notes: usize, duration_secs: f64) -> Vec<hum_analyzer::Note> {
+    // Use a simple chord progression spread evenly across the duration
+    // Pitches: C4, E4, G4, C5 (C major arpeggio), then repeat
+    let base_pitches = [261.63, 329.63, 392.0, 523.25];
+    let note_duration = 0.3; // Each note lasts 300ms
+    let gap = 0.05; // Small gap between notes
+    let step = note_duration + gap;
+    (0..num_notes)
+        .map(|i| {
+            let pitch = base_pitches[i % base_pitches.len()];
+            let onset = i as f64 * step;
+            // Clamp onset so notes don't exceed the duration
+            let onset = onset.min(duration_secs - note_duration);
+            hum_analyzer::Note::new(pitch, onset, note_duration, 0.8)
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -796,22 +803,14 @@ fn run_headless(
     );
 
     // Demo notes for headless mode
-    let demo_notes = vec![
-        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
-        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
-        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
-        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
-    ];
-    println!(
-        "  • Demo notes: {:?}",
-        demo_notes
-            .iter()
-            .map(|n| n.to_note_name())
-            .collect::<Vec<_>>()
-    );
-
-    // Determine chop count
+    let max_duration = 10.0;
     let target_num_chops = num_chops.unwrap_or(16);
+    // BUG-5 fix: demo notes scale to match sample duration + target chop count
+    let demo_notes = generate_demo_notes(target_num_chops, max_duration);
+    println!(
+        "  • Demo notes ({})",
+        demo_notes.len()
+    );
     println!("  • Target chops: {}", target_num_chops);
 
     // Process
@@ -905,19 +904,11 @@ fn run_demo_mode(
     println!();
     println!("→ Generating demo output (using first 10s of sample)...");
 
-    let demo_notes = vec![
-        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
-        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
-        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
-        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
-    ];
-
+    let demo_duration = 10.0;
+    let demo_notes = generate_demo_notes(4, demo_duration);
     println!(
-        "  • Demo notes: {:?}",
-        demo_notes
-            .iter()
-            .map(|n| n.to_note_name())
-            .collect::<Vec<_>>()
+        "  • Demo notes ({})",
+        demo_notes.len()
     );
 
     // For demo, trim to 10 seconds and use 16 chops

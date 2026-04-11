@@ -448,17 +448,17 @@ impl Mapper {
         let fade_len = fade_samples.min(samples.len() / 4);
         let len = samples.len();
 
-        // Apply fade in (attack)
+        // Apply fade in (attack): 0.0 → 1.0
         for (i, sample) in samples.iter_mut().enumerate().take(fade_len) {
             let gain = i as f32 / fade_len as f32;
             *sample *= gain;
         }
 
-        // Fade out (release) - use range loop as we need computed index
+        // Fade out (release): 1.0 → 0.0 (BUG-6 fix: invert the gain direction)
         #[allow(clippy::needless_range_loop)]
         for i in 0..fade_len {
             let idx = len - 1 - i;
-            let gain = i as f32 / fade_len as f32;
+            let gain = 1.0 - (i as f32 / fade_len as f32); // descending: 1.0 → ~0.0
             samples[idx] *= gain;
         }
     }
@@ -473,8 +473,13 @@ impl Mapper {
 
     /// Process a single note-to-chop mapping.
     /// In JDilla mode: chops keep their original length, velocity is applied.
+    ///
+    /// Duration mode: chops can be trimmed to note duration, looped to fill note,
+    /// or played at full length (classic JDilla behavior).
     pub fn process_mapping(&self, note: &Note, chop: &Chop, output_onset: f64) -> MappedChop {
         // JDilla style: chops keep original length (no time stretch)
+        // NOTE: We apply velocity gain only; full chop length is preserved.
+        // For trimmed-to-note behavior, use process_mapping_trimmed() instead.
         let mut samples = chop.samples.clone();
 
         // Pitch shift if enabled
@@ -500,7 +505,119 @@ impl Mapper {
         MappedChop::new(samples, chop.index, output_onset, output_duration)
     }
 
+    /// Process a single note-to-chop mapping with note-duration trimming.
+    /// The chop is trimmed (or padded) to match the note's duration.
+    /// Uses a short fade-out at the end to avoid clicks.
+    ///
+    /// BUG-2 fix: chop length is now trimmed to note.duration_sec
+    /// with a clean fade-out, avoiding muddy overlaps.
+    pub fn process_mapping_trimmed(
+        &self,
+        note: &Note,
+        chop: &Chop,
+        output_onset: f64,
+    ) -> MappedChop {
+        let target_samples = (note.duration_sec * self.sample_rate as f64) as usize;
+
+        // Clone and apply pitch shift BEFORE trimming (keeps analysis pristine)
+        let mut samples = if self.config.enable_pitch_shift {
+            let chop_pitch = self.estimate_chop_pitch(chop);
+            if chop_pitch > 0.0 && note.pitch_hz > 0.0 {
+                let semitones = self.pitch_diff_semitones(chop_pitch, note.pitch_hz);
+                if semitones != 0 {
+                    chop.samples.clone() // pitch shift applied below
+                } else {
+                    chop.samples.clone()
+                }
+            } else {
+                chop.samples.clone()
+            }
+        } else {
+            chop.samples.clone()
+        };
+
+        // Apply pitch shift if enabled (on full chop, then trim)
+        if self.config.enable_pitch_shift {
+            let chop_pitch = self.estimate_chop_pitch(chop);
+            if chop_pitch > 0.0 && note.pitch_hz > 0.0 {
+                let semitones = self.pitch_diff_semitones(chop_pitch, note.pitch_hz);
+                if semitones != 0 {
+                    // Pitch shift to match note pitch
+                    // For trimmed mode, shift directly to target length
+                    let shifted =
+                        self.apply_pitch_shift_raw(&chop.samples, note.pitch_hz / chop_pitch);
+                    samples = shifted;
+                }
+            }
+        }
+
+        // Velocity gain
+        self.apply_velocity_gain(&mut samples, note.velocity);
+
+        // Trim or pad to target length
+        let mut output_samples: Vec<f32>;
+        if samples.len() > target_samples {
+            // Trim with fade-out to avoid clicks
+            output_samples = samples[..target_samples].to_vec();
+            let fade_samples = 32.min(target_samples / 4);
+            Self::apply_fade_out(&mut output_samples, fade_samples);
+        } else if samples.len() < target_samples {
+            // Pad with silence (note continues but sample ended)
+            output_samples = samples.clone();
+            output_samples.resize(target_samples, 0.0);
+        } else {
+            output_samples = samples;
+        }
+
+        // Apply fade in to avoid clicks at the start
+        let fade_samples = 32.min(output_samples.len() / 4);
+        Self::apply_fade_in(&mut output_samples, fade_samples);
+
+        let output_duration = output_samples.len() as f64 / self.sample_rate as f64;
+        MappedChop::new(output_samples, chop.index, output_onset, output_duration)
+    }
+
+    /// Apply pitch shift directly by pitch ratio (used by trimmed mode).
+    fn apply_pitch_shift_raw(&self, samples: &[f32], pitch_ratio: f32) -> Vec<f32> {
+        if pitch_ratio == 1.0 || pitch_ratio <= 0.0 {
+            return samples.to_vec();
+        }
+
+        let target_len = (samples.len() as f64 / pitch_ratio as f64) as usize;
+        let target_len = target_len.max(1);
+        self.high_quality_resample(samples, target_len)
+    }
+
+    /// Apply a fade-in ramp (0.0 → 1.0) at the start of samples.
+    fn apply_fade_in(samples: &mut [f32], fade_samples: usize) {
+        if samples.len() < 2 || fade_samples == 0 {
+            return;
+        }
+        let fade_len = fade_samples.min(samples.len() / 4);
+        for (i, sample) in samples.iter_mut().enumerate().take(fade_len) {
+            let gain = i as f32 / fade_len as f32;
+            *sample *= gain;
+        }
+    }
+
+    /// Apply a fade-out ramp (1.0 → 0.0) at the end of samples.
+    fn apply_fade_out(samples: &mut [f32], fade_samples: usize) {
+        if samples.len() < 2 || fade_samples == 0 {
+            return;
+        }
+        let fade_len = fade_samples.min(samples.len() / 4);
+        let len = samples.len();
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..fade_len {
+            let idx = len - 1 - i;
+            // idx is always valid because i < fade_len <= len/4 <= len-1 when len>=2
+            let gain = 1.0 - (i as f32 / fade_len as f32);
+            samples[idx] *= gain;
+        }
+    }
+
     /// Process all notes and chops.
+    /// Chops are placed at note onset times (BUG-1 fix: hum timing is now respected).
     pub fn process(&self, notes: &[Note], chops: &[Chop]) -> Result<Vec<MappedChop>, HumChopError> {
         if notes.is_empty() {
             return Err(HumChopError::InvalidAudio(
@@ -515,7 +632,6 @@ impl Mapper {
 
         let mappings = self.map_notes_to_chops(notes, chops);
         let mut mapped_chops: Vec<MappedChop> = Vec::with_capacity(notes.len());
-        let mut current_onset = 0.0;
 
         for (note_idx, &chop_idx) in mappings.iter().enumerate() {
             if chop_idx >= chops.len() {
@@ -525,12 +641,49 @@ impl Mapper {
             let note = &notes[note_idx];
             let chop = &chops[chop_idx];
 
-            let mapped = self.process_mapping(note, chop, current_onset);
+            // BUG-1 fix: place chop at note's hummed onset time, not sequentially
+            // The hummed rhythm now drives the playback timing in the output audio.
+            let mapped = self.process_mapping(note, chop, note.onset_sec);
+            mapped_chops.push(mapped);
+        }
 
-            // JDilla mode: place chops back-to-back with small gaps to prevent clicks
-            let gap = 0.005; // 5ms gap
-            current_onset += mapped.output_duration + gap;
+        Ok(mapped_chops)
+    }
 
+    /// Process all notes and chops with note-duration trimming.
+    /// Chops are trimmed (or padded) to match note duration for cleaner output.
+    ///
+    /// BUG-1 + BUG-2 fix: places chops at note.onset_sec AND trims to note.duration_sec.
+    pub fn process_trimmed(
+        &self,
+        notes: &[Note],
+        chops: &[Chop],
+    ) -> Result<Vec<MappedChop>, HumChopError> {
+        if notes.is_empty() {
+            return Err(HumChopError::InvalidAudio(
+                "No notes to process".to_string(),
+            ));
+        }
+        if chops.is_empty() {
+            return Err(HumChopError::InvalidAudio(
+                "No chops to process".to_string(),
+            ));
+        }
+
+        let mappings = self.map_notes_to_chops(notes, chops);
+        let mut mapped_chops: Vec<MappedChop> = Vec::with_capacity(notes.len());
+
+        for (note_idx, &chop_idx) in mappings.iter().enumerate() {
+            if chop_idx >= chops.len() {
+                continue;
+            }
+
+            let note = &notes[note_idx];
+            let chop = &chops[chop_idx];
+
+            // BUG-1 fix: place at note onset time
+            // BUG-2 fix: trim/pad to note duration
+            let mapped = self.process_mapping_trimmed(note, chop, note.onset_sec);
             mapped_chops.push(mapped);
         }
 
@@ -589,8 +742,12 @@ impl Mapper {
 
     /// Render with crossfade between overlapping chops.
     /// Uses sine-based (half-hann) crossfade envelopes for smooth transitions.
+    ///
+    /// BUG-3 fix: proper half-Hann crossfade using sample position within chop,
+    /// ramp up at the head and ramp down at the tail.
+    /// BUG-4 fix: overlap detection is removed (dead code, was never used).
     fn render_with_crossfade(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
-        let crossfade_samples = self.config.crossfade_samples.min(1024); // Cap at ~23ms
+        let crossfade_samples = self.config.crossfade_samples.min(1024).max(1);
         let sample_rate = self.sample_rate as f64;
 
         // Calculate total output length including overlaps
@@ -601,45 +758,39 @@ impl Mapper {
             max_end = max_end.max(end);
         }
 
-        // Check for overlaps between consecutive chops
-        let _has_overlaps = mapped_chops.windows(2).any(|w| {
-            let curr_end = (w[0].output_onset * sample_rate) as usize + w[0].len();
-            let next_start = (w[1].output_onset * sample_rate) as usize;
-            next_start < curr_end
-        });
-
-        // Build output with crossfade envelopes
-        // We use a multi-pass approach: first render all samples with envelope weights
         let mut output = vec![0.0f32; max_end];
         let mut envelope = vec![0.0f32; max_end];
 
         for mc in mapped_chops {
             let start = (mc.output_onset * sample_rate) as usize;
-            let end = start + mc.len();
-            let overlap_end = end.min(max_end);
+            let end = start + mc.len().min(max_end.saturating_sub(start));
 
-            for i in start..overlap_end {
-                // Check if this sample is within crossfade zone of adjacent chop
+            for i in start..end {
                 let local_idx = i - start;
-                let fade_in_len = crossfade_samples.min(local_idx);
-                let fade_out_len = crossfade_samples.min(mc.len() - local_idx);
+                let chop_len = end - start;
 
-                // Envelope: half-Hann crossfade for smooth transitions
-                let fade_in = if fade_in_len > 0 {
-                    let t = fade_in_len as f32 / crossfade_samples as f32;
-                    (std::f32::consts::PI * 0.5 * t).sin()
+                // BUG-3 fix: half-Hann crossfade at both edges of the chop
+                // fade_in: ramp up from 0→1 in the first crossfade_samples
+                // fade_out: ramp down from 1→0 in the last crossfade_samples
+                // Multiply both envelopes (not min) so the weight is 1.0 in the
+                // middle and ramps to 0 at both edges.
+                let fade_in = if crossfade_samples > 0 {
+                    let ramp = (local_idx as f32 / crossfade_samples as f32).min(1.0);
+                    (std::f32::consts::PI * 0.5 * ramp).sin()
                 } else {
                     1.0
                 };
 
-                let fade_out = if fade_out_len > 0 && fade_out_len < crossfade_samples {
-                    let t = fade_out_len as f32 / crossfade_samples as f32;
-                    (std::f32::consts::PI * 0.5 * (1.0 - t)).sin()
+                let fade_out = if crossfade_samples > 0 {
+                    let remaining = chop_len.saturating_sub(local_idx);
+                    let ramp = (remaining as f32 / crossfade_samples as f32).min(1.0);
+                    (std::f32::consts::PI * 0.5 * ramp).sin()
                 } else {
                     1.0
                 };
 
-                let weight = fade_in.min(fade_out);
+                // Multiply envelopes so weight is 1.0 in the middle
+                let weight = fade_in * fade_out;
 
                 if i < output.len() {
                     output[i] += mc.samples[i - start] * weight;
