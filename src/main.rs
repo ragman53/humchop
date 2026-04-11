@@ -21,6 +21,7 @@ mod player;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// HumChop - Hum-to-chop sampling tool
@@ -35,6 +36,12 @@ struct Args {
     /// Output file path (defaults to output_chopped_<timestamp>.wav)
     #[arg(short, long, value_name = "OUTPUT")]
     output: Option<PathBuf>,
+
+    /// Output directory for all generated files.
+    /// Creates the directory if it doesn't exist.
+    /// All outputs (chops, debug files, etc.) go here.
+    #[arg(short = 'd', long, value_name = "DIR", default_value = "./output")]
+    output_dir: PathBuf,
 
     /// Enable pitch shifting (slower but more accurate)
     #[arg(long)]
@@ -98,6 +105,13 @@ fn main() -> Result<()> {
     println!("{}", "━".repeat(40).dimmed());
     println!();
 
+    // Create output directory if it doesn't exist
+    let output_dir = &args.output_dir;
+    if !output_dir.exists() {
+        println!("→ Creating output directory: {}", output_dir.display());
+        fs::create_dir_all(output_dir)?;
+    }
+
     match args.input {
         Some(input_path) => {
             if args.batch {
@@ -105,6 +119,7 @@ fn main() -> Result<()> {
                 run_batch(
                     input_path.as_path(),
                     args.output.as_deref(),
+                    output_dir,
                     args.pitch_shift,
                     args.pitch_matching,
                     args.num_chops,
@@ -117,6 +132,7 @@ fn main() -> Result<()> {
                 run_headless(
                     input_path.as_path(),
                     args.output.as_deref(),
+                    output_dir,
                     args.pitch_shift,
                     args.pitch_matching,
                     args.segment.as_deref(),
@@ -128,6 +144,7 @@ fn main() -> Result<()> {
                 run_interactive(
                     input_path.as_path(),
                     args.output.as_deref(),
+                    output_dir,
                     args.pitch_shift,
                     args.pitch_matching,
                     args.segment.as_deref(),
@@ -140,6 +157,7 @@ fn main() -> Result<()> {
             println!();
             println!("Options:");
             println!("  -o, --output <file>    Output file path");
+            println!("  -d, --output-dir <dir> Output directory (default: ./output)");
             println!("      --pitch-shift      Enable pitch shifting");
             println!("      --pitch-matching   Match by pitch instead of strength");
             println!("      --no-tui           Run headless (no TUI, demo notes)");
@@ -155,6 +173,7 @@ fn main() -> Result<()> {
             println!("Example:");
             println!("  humchop sample.wav");
             println!("  humchop beat.mp3 -o my_chops.wav");
+            println!("  humchop beat.mp3 -d ./results  # save to ./results/");
             println!("  humchop beat.mp3 --no-tui --num-chops 8  # headless");
         }
     }
@@ -166,6 +185,7 @@ fn main() -> Result<()> {
 fn run_interactive(
     input_path: &Path,
     output_path: Option<&Path>,
+    output_dir: &Path,
     enable_pitch_shift: bool,
     pitch_matching: bool,
     _segment: Option<&str>,
@@ -311,8 +331,8 @@ fn run_interactive(
     println!("  • {} samples collected", hum_samples.len());
 
     // DEBUG: Save the raw hum recording for manual testing
-    let hum_wav_path = std::path::Path::new("debug_hum_recording.wav");
-    if let Err(e) = audio_utils::write_wav(hum_wav_path, &hum_samples, sample_rate) {
+    let hum_wav_path = output_dir.join("debug_hum_recording.wav");
+    if let Err(e) = audio_utils::write_wav(&hum_wav_path, &hum_samples, sample_rate) {
         println!("  ⚠️  Failed to save hum recording for debug: {}", e);
     } else {
         println!("  💾 Saved hum recording to: {}", hum_wav_path.display());
@@ -328,6 +348,7 @@ fn run_interactive(
             enable_pitch_shift,
             pitch_matching,
             output_path,
+            output_dir,
         );
     }
 
@@ -367,6 +388,7 @@ fn run_interactive(
             enable_pitch_shift,
             pitch_matching,
             output_path,
+            output_dir,
         );
     }
 
@@ -406,12 +428,12 @@ fn run_interactive(
 
     // DEBUG: Save individual chops for manual inspection
     for (i, chop) in chops.iter().enumerate() {
-        let chop_path = PathBuf::from(format!("debug_chop_{:02}.wav", i));
+        let chop_path = output_dir.join(format!("debug_chop_{:02}.wav", i));
         if let Err(e) = audio_utils::write_wav(&chop_path, &chop.samples, sample_rate) {
             println!("  ⚠️  Failed to save chop {}: {}", i, e);
         }
     }
-    println!("  💾 Saved {} chops to debug_chop_XX.wav", chops.len());
+    println!("  💾 Saved {} chops to {}/debug_chop_XX.wav", chops.len(), output_dir.display());
 
     let mapper = mapper::Mapper::with_config(
         sample_rate,
@@ -434,18 +456,18 @@ fn run_interactive(
 
     // DEBUG: Save mapped chops for manual inspection
     for (i, mc) in mapped_chops.iter().enumerate() {
-        let mc_path = PathBuf::from(format!("debug_mapped_{:02}.wav", i));
+        let mc_path = output_dir.join(format!("debug_mapped_{:02}.wav", i));
         if let Err(e) = audio_utils::write_wav(&mc_path, &mc.samples, sample_rate) {
             println!("  ⚠️  Failed to save mapped chop {}: {}", i, e);
         }
     }
-    println!("  💾 Saved {} mapped chops to debug_mapped_XX.wav", mapped_chops.len());
+    println!("  💾 Saved {} mapped chops to {}/debug_mapped_XX.wav", mapped_chops.len(), output_dir.display());
     let output = mapper.render_output(&mapped_chops);
 
-    // Generate output filename
+    // Generate output filename (use provided path or create in output_dir)
     let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+        output_dir.join(format!("output_chopped_{}.wav", timestamp))
     });
 
     // Write output
@@ -474,6 +496,7 @@ fn run_interactive(
 fn run_interactive(
     input_path: &Path,
     output_path: Option<&Path>,
+    output_dir: &Path,
     enable_pitch_shift: bool,
     pitch_matching: bool,
     _segment: Option<&str>,
@@ -567,10 +590,10 @@ fn run_interactive(
 
     let output = mapper.render_output(&mapped_chops);
 
-    // Generate output filename
+    // Generate output filename (use provided path or create in output_dir)
     let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+        output_dir.join(format!("output_chopped_{}.wav", timestamp))
     });
 
     // Write output
@@ -603,7 +626,8 @@ fn run_interactive(
 #[allow(clippy::too_many_arguments)]
 fn run_batch(
     input_path: &Path,
-    output_dir: Option<&Path>,
+    output_file: Option<&Path>,
+    output_dir: &Path,
     enable_pitch_shift: bool,
     pitch_matching: bool,
     num_chops: Option<usize>,
@@ -650,13 +674,8 @@ fn run_batch(
     println!("Batch processing {} file(s)...", files.len());
     println!();
 
-    let output_directory = output_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        if input_path.is_dir() {
-            input_path.to_path_buf()
-        } else {
-            input_path.parent().unwrap_or(input_path).to_path_buf()
-        }
-    });
+    // Use the provided output_dir (already created in main)
+    let output_directory = output_dir.to_path_buf();
 
     let mut success_count = 0;
     let mut fail_count = 0;
@@ -669,17 +688,19 @@ fn run_batch(
             file_path.display()
         );
 
-        // Generate output filename
-        let stem = file_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| format!("output_{}", idx));
-        let output_file = output_directory.join(format!("{}_chopped.wav", stem));
+        // Generate output filename (use provided output_file path or create in output_dir)
+        let output_file_path = output_file.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+            let stem = file_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("output_{}", idx));
+            output_directory.join(format!("{}_chopped.wav", stem))
+        });
 
         // Process the file (reuse headless logic but single file)
         match process_single_file(
             file_path,
-            Some(&output_file),
+            Some(&output_file_path),
             enable_pitch_shift,
             pitch_matching,
             num_chops,
@@ -687,7 +708,7 @@ fn run_batch(
             bits,
         ) {
             Ok(_) => {
-                println!("  ✓ Saved to: {}", output_file.display());
+                println!("  ✓ Saved to: {}", output_file_path.display());
                 success_count += 1;
             }
             Err(e) => {
@@ -760,7 +781,7 @@ fn process_single_file(
     let mapped_chops = mapper.process(&demo_notes, &chops)?;
     let output = mapper.render_output(&mapped_chops);
 
-    // Generate output filename
+    // Generate output filename (use provided path or create in current dir with timestamp)
     let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         PathBuf::from(format!("output_chopped_{}.wav", timestamp))
@@ -819,6 +840,7 @@ fn generate_demo_notes(num_notes: usize, duration_secs: f64) -> Vec<hum_analyzer
 fn run_headless(
     input_path: &Path,
     output_path: Option<&Path>,
+    output_dir: &Path,
     enable_pitch_shift: bool,
     pitch_matching: bool,
     _segment: Option<&str>,
@@ -907,10 +929,10 @@ fn run_headless(
 
     let output = mapper.render_output(&mapped_chops);
 
-    // Generate output filename
+    // Generate output filename (use provided path or create in output_dir)
     let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+        output_dir.join(format!("output_chopped_{}.wav", timestamp))
     });
 
     // Create WAV options
@@ -953,6 +975,7 @@ fn run_demo_mode(
     enable_pitch_shift: bool,
     pitch_matching: bool,
     output_path: Option<&Path>,
+    output_dir: &Path,
 ) -> Result<()> {
     println!();
     println!("→ Generating demo output (using first 10s of sample)...");
@@ -1008,10 +1031,10 @@ fn run_demo_mode(
 
     let output = mapper.render_output(&mapped_chops);
 
-    // Generate output filename
+    // Generate output filename (use provided path or create in output_dir)
     let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+        output_dir.join(format!("output_chopped_{}.wav", timestamp))
     });
 
     // Write output
