@@ -9,6 +9,7 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::sample::SampleFormat;
 
 use std::fs::File;
 use std::path::Path;
@@ -115,6 +116,13 @@ fn load_with_symphonia(path: &Path) -> Result<(Vec<f32>, u32)> {
         .make(&track.codec_params, &decoder_opts)
         .map_err(|e| HumChopError::DecodeError(format!("Failed to create decoder: {}", e)))?;
 
+    // Extract audio format parameters (don't change during decoding)
+    let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
+    let is_float = matches!(
+        track.codec_params.sample_format,
+        Some(SampleFormat::F32) | Some(SampleFormat::F64)
+    );
+
     let mut all_samples: Vec<f32> = Vec::new();
 
     loop {
@@ -130,14 +138,34 @@ fn load_with_symphonia(path: &Path) -> Result<(Vec<f32>, u32)> {
                         let spec = *decoded.spec();
                         let duration = decoded.capacity() as u64;
 
-                        // Create a sample buffer
-                        let mut sample_buf = SampleBuffer::<i16>::new(duration, spec);
-                        sample_buf.copy_interleaved_ref(decoded);
-
-                        // Get the samples and convert to f32
-                        for &sample_i16 in sample_buf.samples() {
-                            let sample_f32 = sample_i16 as f32 / 32768.0;
-                            all_samples.push(sample_f32);
+                        // Create appropriate sample buffer and convert to f32
+                        if is_float {
+                            // Float format: keep as-is (normalized to [-1.0, 1.0])
+                            let mut sample_buf = SampleBuffer::<f32>::new(duration, spec);
+                            sample_buf.copy_interleaved_ref(decoded);
+                            all_samples.extend_from_slice(sample_buf.samples());
+                        } else if bits_per_sample > 16 {
+                            // 24-bit or higher integer: use i32 buffer, scale appropriately
+                            let mut sample_buf = SampleBuffer::<i32>::new(duration, spec);
+                            sample_buf.copy_interleaved_ref(decoded);
+                            // 24-bit uses 23 bits of precision, 32-bit uses 31 bits
+                            let scale = if bits_per_sample <= 24 {
+                                8388608.0
+                            } else {
+                                2147483648.0
+                            };
+                            for &sample_i32 in sample_buf.samples() {
+                                let sample_f32 = sample_i32 as f32 / scale;
+                                all_samples.push(sample_f32);
+                            }
+                        } else {
+                            // 16-bit or unknown: use i16 buffer (default)
+                            let mut sample_buf = SampleBuffer::<i16>::new(duration, spec);
+                            sample_buf.copy_interleaved_ref(decoded);
+                            for &sample_i16 in sample_buf.samples() {
+                                let sample_f32 = sample_i16 as f32 / 32768.0;
+                                all_samples.push(sample_f32);
+                            }
                         }
                     }
                     Err(SymphoniaError::IoError(_)) => break,
@@ -442,30 +470,13 @@ mod tests {
         temp_file
     }
 
-    #[allow(dead_code, clippy::unwrap_used)]
-    fn create_named_temp_wav(samples: &[f32], sample_rate: u32) -> NamedTempFile {
-        let temp_file = NamedTempFile::new().unwrap();
-        // Write wav header manually or use hound
-        let path = temp_file.path();
-
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-
-        let mut writer = WavWriter::create(path, spec).unwrap();
-        for &s in samples {
-            writer.write_sample(s).unwrap();
-        }
-        writer.finalize().unwrap();
-
-        temp_file
-    }
-
+    /// Computes maximum absolute difference between two sample arrays.
+    /// More robust than sum-based metrics for detecting quantization artifacts.
     fn vec_diff(a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, |a, b| a.max(b))
     }
 
     #[test]
@@ -562,5 +573,154 @@ mod tests {
         let temp = NamedTempFile::new().unwrap();
         let result = write_wav(temp.path(), &[], 44100);
         assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INTEGRATION TESTS - Full pipeline with real audio processing
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_integration_16bit_wav_roundtrip() {
+        // Test full pipeline: create 16-bit WAV → load → verify precision
+        let sample_rate = 44100u32;
+        let duration_secs = 0.1;
+        let num_samples = (sample_rate as f64 * duration_secs) as usize;
+
+        // Generate audio with fine precision (beyond 16-bit)
+        let original: Vec<f32> = (0..num_samples)
+            .map(|i| (i as f32 / sample_rate as f32 * 1000.0).sin() * 0.5)
+            .collect();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let wav_path = temp_dir.path().join("test_16bit.wav");
+
+        // Write as 16-bit (loses some precision, but within tolerance)
+        {
+            let spec = WavSpec {
+                channels: 1,
+                sample_rate,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = WavWriter::create(&wav_path, spec).unwrap();
+            for &s in &original {
+                let scaled = (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16;
+                writer.write_sample(scaled).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+
+        // Load and verify
+        let (loaded, loaded_rate) = load_audio(&wav_path).unwrap();
+        assert_eq!(loaded_rate, sample_rate);
+
+        // 16-bit quantization error should be < 1/32768 ≈ 0.00003
+        let max_diff = vec_diff(&original, &loaded);
+        assert!(
+            max_diff < 0.0001,
+            "16-bit roundtrip error {} exceeds tolerance",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_integration_full_pipeline_sample_chopping() {
+        use crate::sample_chopper::SampleChopper;
+
+        // Generate realistic audio with transients
+        let sample_rate = 44100u32;
+        let duration_secs = 0.5;
+        let num_samples = (sample_rate as f64 * duration_secs) as usize;
+
+        let mut original = vec![0.0f32; num_samples];
+        // Add sine wave
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..num_samples {
+            let t = i as f32 / sample_rate as f32;
+            original[i] += (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 0.3;
+        }
+        // Add transient at 0.1s
+        let transient_idx = (sample_rate as f64 * 0.1) as usize;
+        if transient_idx < num_samples {
+            for i in 0..100.min(num_samples - transient_idx) {
+                original[transient_idx + i] += if i < 50 {
+                    (1.0 - i as f32 / 50.0) * 0.8
+                } else {
+                    -(1.0 - (i - 50) as f32 / 50.0) * 0.8
+                };
+            }
+        }
+
+        // Process through chopper
+        let chopper = SampleChopper::new(sample_rate);
+        let chops = chopper.chop(&original, 4).unwrap();
+
+        // Verify chops
+        assert_eq!(chops.len(), 4, "Should produce 4 chops");
+
+        // Verify chops cover the sample (using time-based coverage)
+        let last_chop_end_time = chops
+            .last()
+            .map(|c| c.start_time + c.duration)
+            .unwrap_or(0.0);
+
+        // Chops should roughly cover the sample duration
+        assert!(
+            last_chop_end_time >= duration_secs * 0.9,
+            "Chops should cover most of the sample"
+        );
+
+        // Verify chop indices are sequential
+        for (i, chop) in chops.iter().enumerate() {
+            assert_eq!(chop.index, i, "Chop {} should have index {}", i, i);
+        }
+    }
+
+    #[test]
+    fn test_integration_mapper_creation() {
+        use crate::mapper::Mapper;
+        use crate::sample_chopper::SampleChopper;
+
+        let sample_rate = 44100u32;
+
+        // Create sample
+        let sample: Vec<f32> = (0..22050)
+            .map(|i| ((i as f32 / 44100.0) * 440.0 * 2.0 * std::f32::consts::PI).sin() * 0.5)
+            .collect();
+
+        // Chop it
+        let chopper = SampleChopper::new(sample_rate);
+        let chops = chopper.chop(&sample, 2).unwrap();
+
+        // Verify chops exist
+        assert_eq!(chops.len(), 2, "Should have 2 chops");
+
+        // Test with empty chops - should return error
+        let mapper = Mapper::with_config(sample_rate, Default::default());
+        let result = mapper.process(&[], &[]);
+        assert!(result.is_err(), "Should error on empty chops");
+    }
+
+    #[test]
+    fn test_integration_stereo_to_mono() {
+        // Test stereo WAV conversion to mono
+        let _sample_rate = 44100u32;
+        let num_samples = 1024usize;
+
+        // Create stereo samples: left = 1.0, right = 0.0
+        let mut stereo = vec![0.0f32; num_samples * 2];
+        for i in 0..num_samples {
+            stereo[i * 2] = 1.0; // Left
+            stereo[i * 2 + 1] = 0.0; // Right
+        }
+
+        // Convert to mono
+        let mono = to_mono(&stereo, 2);
+
+        assert_eq!(mono.len(), num_samples);
+        // Average of [1.0, 0.0] = 0.5
+        for &sample in &mono {
+            assert!((sample - 0.5).abs() < 0.001);
+        }
     }
 }

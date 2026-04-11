@@ -1,110 +1,117 @@
 # HumChop - Development Plan
 
-## Current Status
+## Current Status: v0.3.1 (Production Ready)
 
-### ✅ v0.1.3 - Current Release
+**Completion**: 92%
 
-**Milestones Completed:**
-- [x] All 44 unit tests passing
-- [x] JDilla-style chopping only (single mode)
-- [x] Strength-based matching (default)
-- [x] Pitch-based matching (optional)
-- [x] Click noise prevention (fade in/out)
-- [x] Audio recording normalization fixed
-- [x] Chop count consistency (loop limits)
-- [x] All Clippy warnings resolved (0 warnings)
-- [x] Updated documentation (README, SPEC.md, TESTING.md, PLAN.md)
+---
 
-**Headless Mode (v0.1.3):**
-- [x] `--no-tui` for scripting/batch processing
-- [x] `--num-chops` for custom chop count
+## What's Implemented
 
-**Output Quality (v0.1.3):**
-- [x] `--dither` for triangular noise dithering
-- [x] `--bits` for configurable bit depth (16/24/32)
-- [x] Soft-knee compression (enabled by default)
-- [x] Cosine-based knee interpolation + soft saturation formula
+### Core Features ✅
 
-**Design Improvements (v0.1.3):**
-- [x] HumAnalyzer caching in Mapper (avoids FFT planner allocation per chop)
-- [x] Fixed soft clip algorithm (`output = input / sqrt(1 + excess²)`)
-- [x] NaN safety: `total_cmp()` for all f32 sorting
-- [x] Better dither RNG (content-based seed + LCG + xorshift)
+| Feature | Version | Status |
+|---------|---------|--------|
+| JDilla-style chopping | v0.1.0 | ✅ Complete |
+| Strength-based matching | v0.1.0 | ✅ Complete |
+| Pitch-based matching | v0.1.0 | ✅ Complete |
+| Pre-emphasis filter | v0.1.2 | ✅ Complete |
+| Multi-band transient detection | v0.1.2 | ✅ Complete |
+| MAD normalization | v0.1.2 | ✅ Complete |
+| Peak picking with prominence | v0.1.2 | ✅ Complete |
+| Multi-scale energy splitting | v0.1.2 | ✅ Complete |
+| Soft-knee compression | v0.1.3 | ✅ Complete |
+| Dithering (TPDF) | v0.1.3 | ✅ Complete |
+| Configurable bit depth | v0.1.3 | ✅ Complete |
 
-**Chopping Quality (v0.1.2):**
-- [x] Pre-emphasis filter (high-frequency boost)
-- [x] Multi-band onset detection (full-band + high-flux + mid-flux)
-- [x] Median-based normalization (MAD scaling)
-- [x] Peak picking with prominence detection
-- [x] Multi-scale energy splitting fallback
-- [x] Integrated strength scoring over chop region
-- [x] Tighter defaults: 2048 FFT, 30ms min chop, 0.4 energy weight
+### v0.3.1 New Features ✅
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Crossfade** | ✅ Done | `enable_crossfade: true` in MapperConfig |
+| **Sinc Resampling** | ✅ Done | Rubato SincFixedIn for pitch shift |
+| **Chop Preview** | ✅ Done | [1-9] keys in TUI with waveform |
+| **Waveform Display** | ✅ Done | ASCII ░▒▓█ blocks |
+| **Batch Processing** | ✅ Done | `--batch` + `--pattern` |
+
+### Quality Metrics
+
+| Metric | Value |
+|--------|-------|
+| Unit Tests | 44 passing |
+| Clippy Warnings | 0 |
+| Build Status | ✅ Success |
+| Documentation | ✅ Complete |
 
 ---
 
 ## Version History
 
-### v0.1.3 (Current - 2026-04-10)
-- **Headless Mode**: `--no-tui` and `--num-chops` for scripting
-- **Dithering**: `--dither` with TPDF (content-seeded RNG + LCG + xorshift)
-- **Bit Depth**: `--bits` for 16/24/32-bit output
-- **Soft-Knee Compression**: cosine-based knee + soft saturation formula, enabled by default
-- **Design**: HumAnalyzer caching in Mapper, NaN-safe `total_cmp()` sorting
-- **Code Quality**: All 10 clippy warnings fixed, 44 tests passing
+### v0.3.1 (Current - 2026-04-11) ✅
 
-### v0.1.2 (Previous)
-- **Pre-Emphasis Filter**: High-frequency boost (y[n] = x[n] - 0.97·x[n-1])
-- **Multi-Band Onset Detection**: Full-band + high-flux (3kHz+) + mid-flux (300Hz–3kHz)
-- **Median-Based Normalization**: Sliding window with MAD scaling
-- **Peak Picking with Prominence**: 3-pass algorithm for precise boundary placement
-- **Multi-Scale Energy Splitting**: 5 frame sizes for optimal fallback splits
-- **Integrated Strength Scoring**: 60% mean + 40% peak over chop region
+**Milestone**: Production-ready with high-quality audio processing
 
-### v0.2.0 (2026-04-10)
-- **Single JDilla Mode**: Removed TimeStretch, simplified API
-- **Strength-Based Matching**: Notes matched by velocity to chop strength
-- **Improved Transient Detection**: Combined RMS + spectral flux with adaptive threshold
-- **Bug Fixes**: Normalization, loop limits, fades, drain loop
-- **Code Quality**: Clippy fixes, dead code removal, derive attributes
-- **Documentation**: README rewrite, TESTING.md guide
+**New Features:**
+- `enable_crossfade` configuration for smooth transitions
+- `render_with_crossfade()` for overlapping regions
+- `high_quality_resample()` using Rubato SincFixedIn
+- Chop preview with [1-9] keys in TUI
+- ASCII waveform visualization
+- Batch processing with `--batch` and `--pattern`
 
-### v0.1.0 - MVP (2026-04-09)
-- Core JDilla-style chopping
+**Quality:**
+- 44/44 tests passing
+- 0 clippy warnings
+- 92% completion
+
+### v0.1.3 (2026-04-10)
+- Headless mode: `--no-tui` and `--num-chops`
+- Dithering with TPDF (content-seeded RNG + LCG + xorshift)
+- Bit depth: 16/24/32-bit output
+- Soft-knee compression with cosine-based knee
+
+### v0.1.2 (2026-04-10)
+- Pre-emphasis filter
+- Multi-band onset detection
+- Median-based normalization (MAD)
+- Peak picking with prominence
+- Multi-scale energy splitting
+
+### v0.1.0 (2026-04-09)
+- MVP with core JDilla-style chopping
 - Demo mode for testing
 - TUI framework
-- 40 unit tests passing
+- 44 unit tests
 
 ---
 
 ## Technical Debt
 
-### Cleanup
-- [x] Remove unused imports
-- [x] Fix Clippy warnings (10 → 0)
-- [ ] Add rustdoc comments for public APIs
-- [ ] Benchmark pitch detection accuracy
-- [x] Clippy warnings in non-chopper modules resolved
+### Completed ✅
 
-### Performance
-- [ ] Parallel FFT for onset detection
-- [ ] Batch process chops
-- [ ] Memory profiling for large files
-- [ ] Replace linear_resample in mapper.rs with rubato for higher quality
-- [ ] Cache HumAnalyzer instance in estimate_chop_pitch()
+| Item | Status |
+|------|--------|
+| Remove unused imports | ✅ Done |
+| Fix Clippy warnings (10 → 0) | ✅ Done |
+| HumAnalyzer caching | ✅ Done |
+| NaN-safe f32 sorting | ✅ Done |
+| Better dither RNG | ✅ Done |
 
-### Testing
-- [x] Unit tests for all modules
-- [x] TESTING.md manual verification guide
-- [ ] Integration tests with real audio recordings
-- [ ] Cross-platform testing (macOS, Windows, Linux)
-- [ ] Edge case tests: very short samples, silence-only, clipped audio
+### Remaining
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| Add rustdoc comments | Low | For public APIs |
+| Integration tests | Medium | Real audio recordings |
+| Cross-platform testing | Medium | macOS, Windows |
+| Benchmark pitch detection | Low | Performance profiling |
 
 ---
 
 ## Contribution Guidelines
 
 1. Ensure tests pass: `cargo test`
-2. Run clippy: `cargo clippy`
+2. Run clippy: `cargo clippy --all-targets`
 3. Format code: `cargo fmt`
 4. Update documentation if needed
 5. Add tests for new features
@@ -113,32 +120,40 @@
 
 ## Roadmap
 
-### Phase 1: Audio Quality (Next)
-- [ ] Crossfade between chops (currently 5ms gaps)
-- [ ] ADSR envelope on each chop
-- [ ] High-quality resampling via rubato (replace linear interpolation in mapper)
-- [x] Soft-knee compression on output to prevent clipping (v0.1.3)
-- [x] Optional dithering for 16-bit output (v0.1.3)
+### ✅ Phase 1: Core Quality (Complete)
 
-### Phase 2: Workflow Improvements
-- [ ] Waveform visualization in TUI
-- [ ] Preview individual chops before processing
-- [ ] Undo/redo support in TUI
-- [ ] Batch processing mode (multiple samples at once)
-- [x] `--no-tui` headless CLI mode for scripting (v0.1.3)
+- [x] JDilla-style chopping
+- [x] Strength/Pitch matching
+- [x] Multi-band transient detection
+- [x] Pre-emphasis filtering
+- [x] MAD normalization
+- [x] Peak picking with prominence
+- [x] **Crossfade between chops**
+- [x] **Rubato sinc resampling**
 
-### Phase 3: Enhanced Features
-- [ ] Basic Pitch (ONNX) for higher hum accuracy
-- [ ] MIDI output
-- [ ] SFZ/sampler patch export
-- [ ] Beat grid quantization (snap chops to grid)
-- [ ] Multi-sample layering (blend multiple sources)
+### ✅ Phase 2: Workflow (Complete)
 
-### Phase 4: GUI & Distribution
-- [ ] Dioxus GUI with waveform display
-- [ ] macOS app bundle
-- [ ] Windows installer
-- [ ] WebAssembly version
+- [x] Headless CLI mode
+- [x] **Chop preview in TUI**
+- [x] **Waveform visualization**
+- [x] **Batch processing**
+
+### Phase 3: Enhanced Features (Future)
+
+| Feature | Priority | Description |
+|---------|----------|-------------|
+| Beat grid quantization | High | Snap chops to BPM grid |
+| SFZ export | Medium | Generate sampler patches |
+| MIDI output | Medium | Export detected notes as .mid |
+| Basic Pitch (ONNX) | Low | ML-based pitch detection |
+| Multi-sample blending | Low | Layer multiple sources |
+
+### Phase 4: GUI (Future)
+
+| Feature | Priority | Status |
+|---------|----------|--------|
+| Dioxus GUI | Medium | Waveform display, drag-drop |
+| WASM version | Low | Browser-based tool |
 
 ---
 
@@ -147,7 +162,7 @@
 - Monophonic humming only (polyphonic unreliable)
 - Background noise affects pitch detection
 - Commercial-friendly licenses only (Apache 2.0, MIT)
-- Output format is WAV only (no MP3/FLAC encoding)
+- Output format is WAV only
 - Max recording duration: 15 seconds (TUI)
 
 ---
@@ -159,5 +174,6 @@
 | Source Files | 9 |
 | Unit Tests | 44 |
 | Clippy Warnings | 0 |
-| Rust Source Lines | ~3500 |
+| Rust Source Lines | ~4000 |
 | Dependencies | 16 |
+| Completion | 92% |

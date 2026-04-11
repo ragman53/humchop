@@ -91,6 +91,10 @@ pub struct App {
     pub mapper_config: MapperConfig,
     /// Audio level for recording meter (0.0 to 1.0)
     pub audio_level: f32,
+    /// Chopped sample data for preview
+    pub chops: Option<Vec<crate::sample_chopper::Chop>>,
+    /// Selected chop index for preview
+    pub selected_chop: Option<usize>,
     /// Quit flag
     pub should_quit: bool,
     /// Audio recorder (only available with audio-io feature)
@@ -118,6 +122,8 @@ impl App {
             processing_progress: 0.0,
             mapper_config: MapperConfig::default(),
             audio_level: 0.0,
+            chops: None,
+            selected_chop: None,
             should_quit: false,
             #[cfg(feature = "audio-io")]
             recorder: None,
@@ -272,6 +278,10 @@ impl App {
                     }
                 };
 
+                // Store chops for preview
+                self.chops = Some(chops.clone());
+                self.selected_chop = Some(0);
+
                 self.processing_progress = 0.7;
 
                 let mapper = Mapper::with_config(self.sample_rate, self.mapper_config.clone());
@@ -320,6 +330,8 @@ impl App {
         self.recording_duration = 0.0;
         self.recording_start = None;
         self.processing_progress = 0.0;
+        self.chops = None;
+        self.selected_chop = None;
 
         if self.sample.is_some() {
             self.state = AppState::Ready;
@@ -477,9 +489,29 @@ fn render_ready_content(frame: &mut Frame, area: Rect, app: &App) {
         "Pitch"
     };
 
+    // Generate preview waveform if sample is loaded
+    let waveform_preview = if let Some(ref samples) = app.sample {
+        // Show first 5 seconds of waveform
+        let preview_samples = samples
+            .iter()
+            .take(5 * app.sample_rate as usize)
+            .collect::<Vec<_>>();
+        format!(
+            "Waveform: {}",
+            generate_waveform_preview(
+                &preview_samples.iter().map(|s| **s).collect::<Vec<f32>>(),
+                60
+            )
+        )
+    } else {
+        String::new()
+    };
+
     let text = vec![
         Line::from(Span::raw(sample_info)),
         Line::from(Span::raw(sample_stats)),
+        Line::from(""),
+        Line::from(Span::raw(waveform_preview)),
         Line::from(""),
         Line::from(Span::raw(format!(
             "Mode: JDilla | Matching: {}",
@@ -573,6 +605,42 @@ fn render_processing_content(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+/// Generate ASCII waveform preview for a chop.
+fn generate_waveform_preview(samples: &[f32], width: usize) -> String {
+    if samples.is_empty() || width == 0 {
+        return String::new();
+    }
+
+    let chunk_size = samples.len() / width;
+    if chunk_size == 0 {
+        return "#".repeat(samples.len().min(width));
+    }
+
+    let mut result = String::with_capacity(width);
+    for i in 0..width {
+        let start = i * chunk_size;
+        let end = (start + chunk_size).min(samples.len());
+
+        // Find max amplitude in this chunk
+        let max_amp = samples[start..end]
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+
+        // Map to visual density (0-9 blocks)
+        let density = ((max_amp * 9.0) as usize).min(9);
+        let char = match density {
+            0 => '░',
+            1..=3 => '▒',
+            4..=6 => '▓',
+            _ => '█',
+        };
+        result.push(char);
+    }
+
+    result
+}
+
 /// Render complete content.
 fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
     let output_str = app
@@ -607,24 +675,57 @@ fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(notes_widget, area);
 
-    // Show output info
-    let info_area = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(3),
-        area.width,
-        3,
-    );
-    let info = Paragraph::new(vec![
+    // Show chops info with preview
+    let chops_info = if let Some(ref chops) = app.chops {
+        let total = chops.iter().map(|c| c.len()).sum::<usize>();
+        format!("{} chops | {} samples total", chops.len(), total)
+    } else {
+        "No chops".to_string()
+    };
+
+    // Show selected chop preview with waveform
+    let chop_preview = if let (Some(ref chops), Some(idx)) = (&app.chops, app.selected_chop) {
+        if idx < chops.len() {
+            let chop = &chops[idx];
+            let waveform = generate_waveform_preview(&chop.samples, 40);
+            format!(
+                "Chop {}: {:.2}s - {:.2}s (strength: {:.2})\n  {}",
+                idx + 1,
+                chop.start_time,
+                chop.start_time + chop.duration,
+                chop.strength,
+                waveform
+            )
+        } else {
+            "No chop selected".to_string()
+        }
+    } else {
+        "".to_string()
+    };
+
+    // Show output info with chops details
+    let text = vec![
         Line::from(vec![
             Span::styled("✓ ", Style::default().fg(Color::Green)),
             Span::raw("Output saved: "),
             Span::raw(&output_str),
         ]),
         Line::from(""),
-        Line::from("Press 'r' to start over or 'q' to quit"),
-    ])
-    .wrap(Wrap { trim: true });
-    frame.render_widget(info, info_area);
+        Line::from(format!("Chops: {}", chops_info)),
+        Line::from(""),
+        Line::from(chop_preview),
+        Line::from(""),
+        Line::from("Press [1-9] to preview chops | 'r' to start over | 'q' to quit"),
+    ];
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: true });
+
+    let info_area = Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(5),
+        area.width,
+        5,
+    );
+    frame.render_widget(paragraph, info_area);
 }
 
 /// Render error content.
@@ -750,6 +851,29 @@ fn handle_key_event(key: KeyEvent, app: &mut App) {
         KeyCode::Char('m') | KeyCode::Char('M') => {
             if app.state == AppState::Ready {
                 app.toggle_pitch_matching();
+            }
+        }
+
+        // Number keys 1-9 for chop preview (in Complete state)
+        KeyCode::Char('1')
+        | KeyCode::Char('2')
+        | KeyCode::Char('3')
+        | KeyCode::Char('4')
+        | KeyCode::Char('5')
+        | KeyCode::Char('6')
+        | KeyCode::Char('7')
+        | KeyCode::Char('8')
+        | KeyCode::Char('9') => {
+            if app.state == AppState::Complete {
+                let num = match key.code {
+                    KeyCode::Char(c) => c.to_digit(10).unwrap_or(1) as usize,
+                    _ => 1,
+                };
+                if let Some(ref chops) = app.chops {
+                    if num <= chops.len() {
+                        app.selected_chop = Some(num - 1);
+                    }
+                }
             }
         }
 

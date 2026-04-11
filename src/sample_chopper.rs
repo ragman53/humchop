@@ -409,9 +409,8 @@ impl SampleChopper {
                 .sum::<f32>()
                 / (win / 2 - high_boundary).max(1) as f32;
 
-            prev_mag = mags.clone();
-
             // Mid-band flux (emphasizes musical content: vocals, instruments)
+            // Must be computed BEFORE updating prev_mag, otherwise it's always 0
             let mid_flux: f32 = if low_boundary < high_boundary {
                 mags[low_boundary..high_boundary]
                     .iter()
@@ -422,6 +421,8 @@ impl SampleChopper {
             } else {
                 0.0
             };
+
+            prev_mag = mags.clone();
 
             // Weighted combination: energy + full-band flux + band-specific fluxes
             let energy_component = cfg.energy_weight * rms_deriv;
@@ -704,8 +705,8 @@ impl SampleChopper {
 
         let chops = points
             .windows(2)
+            .filter(|w| w[1] > w[0])
             .enumerate()
-            .filter(|(_, w)| w[1] > w[0])
             .map(|(i, w)| {
                 let start_time = w[0] as f64 / self.sample_rate as f64;
                 Chop::new(sample[w[0]..w[1]].to_vec(), i, start_time, self.sample_rate)

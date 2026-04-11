@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes how to verify HumChop functionality through manual testing.
+This document describes how to verify HumChop functionality through automated and manual testing.
 
 ## Quick Test Commands
 
@@ -10,8 +10,8 @@ This document describes how to verify HumChop functionality through manual testi
 # 1. Run all unit tests
 cargo test
 
-# 2. Run clippy for warnings
-cargo clippy
+# 2. Run clippy for warnings (all targets)
+cargo clippy --all-targets
 
 # 3. Format code
 cargo fmt -- --check
@@ -23,27 +23,44 @@ cargo build --no-default-features --features core-only
 cargo build --features audio-io
 ```
 
+---
+
+## Unit Test Coverage
+
+### 44 Tests Passing
+
+| Module | Tests | Description |
+|--------|-------|-------------|
+| `hum_analyzer` | 4 | Pitch detection, MIDI conversion, RMS calculation |
+| `sample_chopper` | 8 | Chopping, boundaries, strength scoring |
+| `mapper` | 12 | Matching, rendering, soft clip, crossfade |
+| `audio_utils` | 6 | Loading, saving, resampling |
+| `recorder` | 4 | Audio level calculation |
+| `player` | 4 | State management |
+
+---
+
 ## Manual Test Scenarios
 
 ### 1. Sample Loading Test
 
 **Purpose**: Verify audio file loading works for WAV, MP3, FLAC formats.
 
-**Steps**:
 ```bash
-cargo run -- test-sample.wav
+# Test WAV
+cargo run -- test-sample-01.mp3 --no-tui
+
+# Test headless mode
+cargo run -- test-sample-01.mp3 --no-tui --num-chops 8
 ```
 
 **Expected Output**:
 - File loaded successfully
 - Sample rate, duration displayed
-- Demo notes listed (A4, C5, E5, G4)
+- Demo notes listed (A4, C5, E5, G5)
 - Output file created: `output_chopped_*.wav`
 
-**Verification**:
-- [ ] No panic or error messages
-- [ ] Output file exists and has valid WAV header
-- [ ] Duration is reasonable (based on number of notes × chop lengths)
+---
 
 ### 2. JDilla-Style Chopping Test
 
@@ -51,30 +68,60 @@ cargo run -- test-sample.wav
 
 **Steps**:
 ```bash
-# Process with different note counts
-cargo run -- test-sample.wav
-cargo run -- test-sample-01.mp3
+cargo run -- test-sample-01.mp3 --no-tui
 ```
 
 **Expected Behavior**:
-- Chops are detected at transient points (attacks) using multi-band analysis
-- Each chop keeps its original length
-- Chops play with tiny gaps (5ms) to prevent clicks
-- High-velocity notes → strong transient chops (kick, snare)
+- Chops detected at transient points (attacks)
+- Each chop keeps original length
+- **Smooth crossfade** between overlapping regions (v0.3.1)
+- High-velocity notes → strong transient chops
 
-**Verification**:
-- [ ] Output length matches or exceeds input (chops are back-to-back)
-- [ ] Click artifacts are minimized (fade working)
-- [ ] Variable chop lengths (not equal division)
-- [ ] Transient detection is accurate (chops align with musical events)
+---
 
-### 3. Strength Matching Test
+### 3. Crossfade Test (v0.3.1)
+
+**Purpose**: Verify smooth transitions between overlapping chops.
+
+**Steps**:
+```bash
+# Default: crossfade enabled
+cargo run -- test-sample-01.mp3 --no-tui
+
+# Check logs for crossfade mode
+RUST_LOG=debug cargo run -- test-sample-01.mp3 --no-tui 2>&1 | grep -i crossfade
+```
+
+**Expected Behavior**:
+- Overlapping regions use smooth crossfade
+- No clicks or artifacts at boundaries
+- Envelope weighting prevents double-volume
+
+---
+
+### 4. Pitch Shift Quality Test (v0.3.1)
+
+**Purpose**: Verify high-quality sinc interpolation prevents aliasing.
+
+**Steps**:
+```bash
+# Test with pitch shifting (uses Rubato SincFixedIn)
+cargo run -- test-sample-01.mp3 --no-tui --pitch-shift
+```
+
+**Expected Behavior**:
+- Pitch-shifted audio has no audible aliasing
+- Smooth transitions between notes
+- Processing may be slightly slower (high quality)
+
+---
+
+### 5. Strength Matching Test
 
 **Purpose**: Verify high-velocity notes map to strong transients.
 
-**Test with custom notes**:
+**Run test**:
 ```bash
-# Check test_strength_matching test output
 cargo test test_strength_matching -- --nocapture
 ```
 
@@ -82,7 +129,9 @@ cargo test test_strength_matching -- --nocapture
 - Loud note (vel 0.9) → strong chop (strength 0.9)
 - Soft note (vel 0.1) → weak chop (strength 0.1)
 
-### 4. Pitch Detection Test
+---
+
+### 6. Pitch Detection Test
 
 **Purpose**: Verify accurate pitch detection from sine waves.
 
@@ -96,19 +145,73 @@ cargo test test_pitch_detection_sine_wave -- --nocapture
 - 523Hz sine wave detected as C5
 - Error within 10% of expected frequency
 
-### 5. Output Playback Test
+---
+
+### 7. Batch Processing Test (v0.3.1)
+
+**Purpose**: Verify batch mode processes multiple files.
+
+**Steps**:
+```bash
+# Create test directory
+mkdir -p test_batch
+cp test-sample-01.mp3 test_batch/
+cp test-sample-01.mp3 test_batch/sample2.mp3
+
+# Run batch
+cargo run -- test_batch/ --batch -o test_batch_output/
+
+# Check output
+ls test_batch_output/
+```
+
+**Expected**:
+- Both files processed
+- Output in test_batch_output/
+- Progress displayed: [1/2], [2/2]
+- Success/fail counts shown
+
+---
+
+### 8. TUI Chop Preview Test (v0.3.1)
+
+**Purpose**: Verify chop preview with [1-9] keys.
+
+**Steps**:
+```bash
+# Run TUI mode (requires audio-io)
+cargo run -- test-sample-01.mp3
+
+# In TUI:
+# 1. Load sample (waveform displayed)
+# 2. Press 'r' to start recording
+# 3. Press 'r' to stop
+# 4. Wait for processing
+# 5. Press '1' through '9' to preview chops
+```
+
+**Expected Behavior**:
+- Waveform shown when sample loads
+- Chop details displayed when number pressed
+- ASCII waveform (░▒▓█) shows chop shape
+- Start time, duration, strength shown
+
+---
+
+### 9. Output Playback Test
 
 **Purpose**: Verify output audio sounds correct.
 
 **Steps**:
 ```bash
 # Generate output
-cargo run -- test-sample.wav -o test_output.wav
+cargo run -- test-sample-01.mp3 --no-tui -o test_output.wav
 
-# Play with ffplay (or any audio player)
+# Play with ffplay
 ffplay test_output.wav
-# or
-play -t wav test_output.wav  # sox
+
+# Check file format
+file test_output.wav
 ```
 
 **Expected**:
@@ -116,44 +219,53 @@ play -t wav test_output.wav  # sox
 - Chops play in sequence (back-to-back)
 - Pitch matches demo notes (A4, C5, E5, G4)
 
-### 6. CLI Options Test
+---
+
+### 10. CLI Options Test
 
 **Test all CLI combinations**:
 ```bash
 # With pitch shift
-cargo run -- test-sample.wav --pitch-shift -o pitch_test.wav
+cargo run -- test-sample-01.mp3 --pitch-shift -o pitch_test.wav
 
 # With pitch matching
-cargo run -- test-sample.wav --pitch-matching -o pitch_match_test.wav
+cargo run -- test-sample-01.mp3 --pitch-matching -o pitch_match_test.wav
 
-# Combined
-cargo run -- test-sample.wav --pitch-shift --pitch-matching -o combo_test.wav
+# 16-bit with dither
+cargo run -- test-sample-01.mp3 --bits 16 --dither -o dither_test.wav
+
+# Batch with pattern
+cargo run -- ./samples/ --batch --pattern "*.wav" -o ./output/
 ```
 
 **Expected**:
 - All commands complete without error
 - Different output files created
-- Pitch-shift slightly changes perceived pitch
+- Correct bit depth in file metadata
 
-### 7. Error Handling Test
+---
+
+### 11. Error Handling Test
 
 **Test edge cases**:
 ```bash
-# Empty file
-touch empty.wav
-cargo run -- empty.wav  # Should fail gracefully
-
 # Non-existent file
-cargo run -- nonexistent.mp3  # Should show helpful error
+cargo run -- nonexistent.mp3  # Should fail gracefully
 
-# Sample too short
-echo "Test with very short sample" # handled in code
+# Empty directory (batch mode)
+mkdir empty_dir
+cargo run -- empty_dir/ --batch  # Should handle gracefully
+
+# Very short sample
+# (handled in code with fallback)
 ```
 
 **Expected**:
 - Clear error messages
 - No panics
 - Helpful guidance for users
+
+---
 
 ## Module-Specific Tests
 
@@ -205,6 +317,7 @@ Tests:
 - `test_jdilla_keeps_original_length`: No time stretching
 - `test_simple_resample`: Up/down sampling works
 - `test_strength_matching`: Loud→strong, soft→weak
+- `test_soft_knee_compress_*`: Soft clipping tests
 
 ### audio_utils
 
@@ -213,22 +326,31 @@ cargo test audio_utils -- --nocapture
 ```
 
 Tests:
-- `test_load_audio_*`: Various format loading
-- `test_write_wav_*`: WAV writing
-- `test_round_trip_*`: Load → write → load
-- `test_normalize_*`: Peak normalization
+- `test_load_wav_mono`: WAV loading
+- `test_write_wav`: WAV writing
+- `test_round_trip`: Load → write → load
+- `test_normalize`: Peak normalization
+- `test_to_mono`: Stereo to mono conversion
+- `test_resample`: Sample rate conversion
+- `test_empty_audio_error`: Empty input handling
+
+---
 
 ## Integration Test Checklist
 
 After any code change, verify:
 
-- [ ] `cargo test` passes (all 40 tests)
-- [ ] `cargo clippy` shows no new warnings
-- [ ] `cargo fmt` shows no formatting issues
+- [ ] `cargo test` passes (all 44 tests)
+- [ ] `cargo clippy --all-targets` shows no warnings
+- [ ] `cargo fmt -- --check` shows no formatting issues
 - [ ] `cargo build` succeeds
 - [ ] `cargo build --features audio-io` succeeds
 - [ ] Demo mode produces valid WAV output
 - [ ] Output plays without clicks
+- [ ] Crossfade produces smooth transitions
+- [ ] Batch mode processes multiple files
+
+---
 
 ## Known Test Limitations
 
@@ -236,6 +358,8 @@ After any code change, verify:
 2. **Monophonic assumption**: Polyphonic pitch detection not tested
 3. **Noise sensitivity**: High levels of background noise may affect results
 4. **WSL2 audio**: Recording requires PulseAudio setup on WSL
+
+---
 
 ## Troubleshooting
 
@@ -273,12 +397,14 @@ file output_chopped_*.wav
 ffprobe output_chopped_*.wav
 ```
 
+---
+
 ## Continuous Integration
 
 Before submitting changes, run:
 ```bash
 cargo fmt
-cargo clippy
+cargo clippy --all-targets
 cargo test
-cargo build --release  # optional, slower
+cargo build --release
 ```

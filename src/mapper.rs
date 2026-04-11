@@ -9,6 +9,9 @@
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
 use crate::sample_chopper::{Chop, SampleChopper};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -30,6 +33,8 @@ pub struct MapperConfig {
     pub soft_clip: bool,
     /// Soft clip threshold (in dB, e.g., -1.0 = -1dBFS). Only used if soft_clip is true.
     pub soft_clip_threshold_db: f32,
+    /// Enable crossfade between chops (smooth overlap instead of gaps)
+    pub enable_crossfade: bool,
 }
 
 impl Default for MapperConfig {
@@ -41,6 +46,7 @@ impl Default for MapperConfig {
             strength_matching: true,      // JDilla style - match by strength
             soft_clip: true,              // Enable soft clipping by default
             soft_clip_threshold_db: -1.0, // -1dBFS threshold
+            enable_crossfade: true,       // Enable smooth crossfade by default
         }
     }
 }
@@ -343,19 +349,86 @@ impl Mapper {
         result
     }
 
-    /// Apply pitch shift by semitones.
+    /// Apply pitch shift by semitones using high-quality sinc interpolation.
+    /// Uses rubato SincFixedIn for band-limited resampling that prevents aliasing.
+    ///
+    /// Note: Double-resampling is intentional for JDilla-style chopping.
+    /// The output must match the original chop length for proper sequencing.
+    /// This is a trade-off between quality and consistent chop durations.
     pub fn apply_pitch_shift(&self, chop: &Chop, semitones: i32) -> Vec<f32> {
         if !self.config.enable_pitch_shift || semitones == 0 {
             return chop.samples.clone();
         }
 
-        // Resample: pitch up = shorter, pitch down = longer
+        // Pitch shift ratio: 12 semitones = octave = 2x frequency
         let resample_ratio = 2.0_f64.powf(semitones as f64 / 12.0);
-        let resampled_len = (chop.samples.len() as f64 / resample_ratio).round() as usize;
-        let resampled = self.linear_resample(&chop.samples, resampled_len);
 
-        // Re-stretch to original length to maintain timing
-        self.linear_resample(&resampled, chop.samples.len())
+        // For pitch up (ratio > 1), we need to slow down the audio (more samples)
+        // For pitch down (ratio < 1), we need to speed up the audio (fewer samples)
+        // Then resample back to original length (required for JDilla-style chop sequencing)
+
+        // First resample to target length (inverse of pitch shift)
+        let target_len = (chop.samples.len() as f64 / resample_ratio).round() as usize;
+        let resampled = self.high_quality_resample(&chop.samples, target_len);
+
+        // Then resample back to original length (preserves JDilla chop timing)
+        self.high_quality_resample(&resampled, chop.samples.len())
+    }
+
+    /// High-quality resampling using rubato SincFixedIn.
+    /// Provides band-limited interpolation that prevents aliasing artifacts.
+    fn high_quality_resample(&self, samples: &[f32], target_len: usize) -> Vec<f32> {
+        if samples.is_empty() || target_len == 0 {
+            return vec![];
+        }
+        if target_len == samples.len() {
+            return samples.to_vec();
+        }
+
+        // Calculate resampling ratio
+        let ratio = target_len as f64 / samples.len() as f64;
+
+        // Clamp ratio to reasonable range (1/8x to 8x)
+        let ratio = ratio.clamp(0.125, 8.0);
+
+        // Use SincFixedIn for high-quality async resampling
+        // Parameters chosen for good quality with reasonable performance
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+
+        // Use f64 for internal processing (rubato works best with f64)
+        let input: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
+
+        // Create resampler with target ratio
+        let chunk_size = 1024.min(input.len().max(1));
+        let min_ratio = ratio * 0.5;
+
+        let mut resampler = match SincFixedIn::<f64>::new(ratio, min_ratio, params, chunk_size, 1) {
+            Ok(r) => r,
+            Err(_) => return self.linear_resample(samples, target_len), // Fallback
+        };
+
+        // Process in chunks
+        let waves_in = vec![input]; // Single channel
+        match resampler.process(&waves_in, None) {
+            Ok(waves_out) => {
+                let output = &waves_out[0];
+                // Convert back to f32
+                let result: Vec<f32> = output.iter().map(|&s| s as f32).collect();
+
+                // If we need exact length, resample again with linear
+                if result.len() != target_len {
+                    return self.linear_resample(&result, target_len);
+                }
+                result
+            }
+            Err(_) => self.linear_resample(samples, target_len), // Fallback
+        }
     }
 
     /// Calculate semitone difference between two pitches.
@@ -464,13 +537,22 @@ impl Mapper {
         Ok(mapped_chops)
     }
 
-    /// Render mapped chops to final audio output.
     pub fn render_output(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
         if mapped_chops.is_empty() {
             return vec![];
         }
 
-        // Calculate total output length
+        // For crossfade mode, we need to process overlaps
+        // For non-crossfade mode, simple placement with gaps
+        if self.config.enable_crossfade && mapped_chops.len() > 1 {
+            self.render_with_crossfade(mapped_chops)
+        } else {
+            self.render_simple(mapped_chops)
+        }
+    }
+
+    /// Simple rendering without crossfade (original behavior with gaps).
+    fn render_simple(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
         let total_samples = mapped_chops
             .iter()
             .map(|mc| (mc.output_onset * self.sample_rate as f64) as usize + mc.len())
@@ -479,10 +561,8 @@ impl Mapper {
 
         let mut output = vec![0.0f32; total_samples];
 
-        // Place each chop at its output position
         for mc in mapped_chops {
             let start = (mc.output_onset * self.sample_rate as f64) as usize;
-
             for (i, &sample) in mc.samples.iter().enumerate() {
                 let idx = start + i;
                 if idx < output.len() {
@@ -495,7 +575,90 @@ impl Mapper {
         if self.config.soft_clip {
             output = soft_knee_compress(&output, self.config.soft_clip_threshold_db);
         } else {
-            // Hard normalize to prevent clipping
+            let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            if max_amp > 1.0 {
+                let norm = 1.0 / max_amp;
+                for s in output.iter_mut() {
+                    *s *= norm;
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Render with crossfade between overlapping chops.
+    /// Uses sine-based (half-hann) crossfade envelopes for smooth transitions.
+    fn render_with_crossfade(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
+        let crossfade_samples = self.config.crossfade_samples.min(1024); // Cap at ~23ms
+        let sample_rate = self.sample_rate as f64;
+
+        // Calculate total output length including overlaps
+        let mut max_end = 0usize;
+        for mc in mapped_chops {
+            let start = (mc.output_onset * sample_rate) as usize;
+            let end = start + mc.len();
+            max_end = max_end.max(end);
+        }
+
+        // Check for overlaps between consecutive chops
+        let _has_overlaps = mapped_chops.windows(2).any(|w| {
+            let curr_end = (w[0].output_onset * sample_rate) as usize + w[0].len();
+            let next_start = (w[1].output_onset * sample_rate) as usize;
+            next_start < curr_end
+        });
+
+        // Build output with crossfade envelopes
+        // We use a multi-pass approach: first render all samples with envelope weights
+        let mut output = vec![0.0f32; max_end];
+        let mut envelope = vec![0.0f32; max_end];
+
+        for mc in mapped_chops {
+            let start = (mc.output_onset * sample_rate) as usize;
+            let end = start + mc.len();
+            let overlap_end = end.min(max_end);
+
+            for i in start..overlap_end {
+                // Check if this sample is within crossfade zone of adjacent chop
+                let local_idx = i - start;
+                let fade_in_len = crossfade_samples.min(local_idx);
+                let fade_out_len = crossfade_samples.min(mc.len() - local_idx);
+
+                // Envelope: half-Hann crossfade for smooth transitions
+                let fade_in = if fade_in_len > 0 {
+                    let t = fade_in_len as f32 / crossfade_samples as f32;
+                    (std::f32::consts::PI * 0.5 * t).sin()
+                } else {
+                    1.0
+                };
+
+                let fade_out = if fade_out_len > 0 && fade_out_len < crossfade_samples {
+                    let t = fade_out_len as f32 / crossfade_samples as f32;
+                    (std::f32::consts::PI * 0.5 * (1.0 - t)).sin()
+                } else {
+                    1.0
+                };
+
+                let weight = fade_in.min(fade_out);
+
+                if i < output.len() {
+                    output[i] += mc.samples[i - start] * weight;
+                    envelope[i] += weight;
+                }
+            }
+        }
+
+        // Normalize overlapping regions by envelope sum
+        for i in 0..output.len() {
+            if envelope[i] > 1.0 {
+                output[i] /= envelope[i];
+            }
+        }
+
+        // Apply soft clipping or hard normalization
+        if self.config.soft_clip {
+            output = soft_knee_compress(&output, self.config.soft_clip_threshold_db);
+        } else {
             let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
             if max_amp > 1.0 {
                 let norm = 1.0 / max_amp;

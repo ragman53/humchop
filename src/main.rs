@@ -65,6 +65,16 @@ struct Args {
     /// 16-bit produces smaller files; 32-bit is lossless.
     #[arg(long, value_name = "BITS", default_value = "32")]
     bits: Option<u16>,
+
+    /// Process all audio files in a directory (batch mode).
+    /// All matching files in the directory will be processed.
+    #[arg(short, long)]
+    batch: bool,
+
+    /// Pattern for batch mode (e.g., "*.wav", "*.mp3").
+    /// Defaults to supported formats: wav, mp3, flac.
+    #[arg(long, default_value = "*")]
+    pattern: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -76,14 +86,31 @@ fn main() -> Result<()> {
     // Display welcome message
     println!(
         "{}",
-        "HumChop v0.2.0 - Hum-to-chop sampling tool".green().bold()
+        format!(
+            "HumChop v{} - Hum-to-chop sampling tool",
+            env!("CARGO_PKG_VERSION")
+        )
+        .green()
+        .bold()
     );
     println!("{}", "━".repeat(40).dimmed());
     println!();
 
     match args.input {
         Some(input_path) => {
-            if args.no_tui {
+            if args.batch {
+                // Batch mode: process all matching files in directory
+                run_batch(
+                    input_path.as_path(),
+                    args.output.as_deref(),
+                    args.pitch_shift,
+                    args.pitch_matching,
+                    args.num_chops,
+                    args.dither,
+                    args.bits.unwrap_or(32),
+                    args.pattern.as_deref().unwrap_or("*"),
+                )?;
+            } else if args.no_tui {
                 // Headless mode: process with demo notes, no TUI
                 run_headless(
                     input_path.as_path(),
@@ -421,6 +448,7 @@ fn run_interactive(
     output_path: Option<&Path>,
     enable_pitch_shift: bool,
     pitch_matching: bool,
+    _segment: Option<&str>,
 ) -> Result<()> {
     // Validate input file exists
     if !input_path.exists() {
@@ -454,9 +482,9 @@ fn run_interactive(
     );
 
     println!();
-    println!("⚠️  Microphone recording requires audio-io feature.".yellow());
-    println!("For recording support, build with:".yellow());
-    println!("  cargo build --features audio-io".yellow());
+    println!("⚠️  Microphone recording requires audio-io feature.");
+    println!("For recording support, build with:");
+    println!("  cargo build --features audio-io");
 
     // Generate demo output for testing
     println!();
@@ -544,6 +572,190 @@ fn run_interactive(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Batch processing mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run in batch mode: process all matching audio files in a directory.
+#[allow(clippy::too_many_arguments)]
+fn run_batch(
+    input_path: &Path,
+    output_dir: Option<&Path>,
+    enable_pitch_shift: bool,
+    pitch_matching: bool,
+    num_chops: Option<usize>,
+    enable_dither: bool,
+    bits: u16,
+    pattern: &str,
+) -> Result<()> {
+    use std::fs;
+
+    // Determine if input is a file or directory
+    let files: Vec<PathBuf> = if input_path.is_dir() {
+        // Get all matching files from directory
+        let entries = fs::read_dir(input_path)?;
+        entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                if let Some(ext) = p.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    let pattern_ext = pattern.replace("*", "").to_lowercase();
+                    pattern == "*"
+                        || pattern_ext.is_empty()
+                        || ext_lower == pattern_ext
+                        || ext_lower == "wav"
+                        || ext_lower == "mp3"
+                        || ext_lower == "flac"
+                } else {
+                    false
+                }
+            })
+            .collect()
+    } else {
+        // Single file batch processing
+        vec![input_path.to_path_buf()]
+    };
+
+    if files.is_empty() {
+        println!("No audio files found matching pattern: {}", pattern);
+        return Ok(());
+    }
+
+    println!("Batch processing {} file(s)...", files.len());
+    println!();
+
+    let output_directory = output_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        if input_path.is_dir() {
+            input_path.to_path_buf()
+        } else {
+            input_path.parent().unwrap_or(input_path).to_path_buf()
+        }
+    });
+
+    let mut success_count = 0;
+    let mut fail_count = 0;
+
+    for (idx, file_path) in files.iter().enumerate() {
+        println!(
+            "[{}/{}] Processing: {}",
+            idx + 1,
+            files.len(),
+            file_path.display()
+        );
+
+        // Generate output filename
+        let stem = file_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| format!("output_{}", idx));
+        let output_file = output_directory.join(format!("{}_chopped.wav", stem));
+
+        // Process the file (reuse headless logic but single file)
+        match process_single_file(
+            file_path,
+            Some(&output_file),
+            enable_pitch_shift,
+            pitch_matching,
+            num_chops,
+            enable_dither,
+            bits,
+        ) {
+            Ok(_) => {
+                println!("  ✓ Saved to: {}", output_file.display());
+                success_count += 1;
+            }
+            Err(e) => {
+                println!("  ✗ Failed: {}", e);
+                fail_count += 1;
+            }
+        }
+        println!();
+    }
+
+    println!("─────────────────────────────────");
+    println!(
+        "Batch complete: {} succeeded, {} failed",
+        success_count, fail_count
+    );
+    println!("Output directory: {}", output_directory.display());
+
+    Ok(())
+}
+
+/// Process a single file (reused by batch mode).
+#[allow(clippy::too_many_arguments)]
+fn process_single_file(
+    input_path: &Path,
+    output_path: Option<&Path>,
+    enable_pitch_shift: bool,
+    pitch_matching: bool,
+    num_chops: Option<usize>,
+    enable_dither: bool,
+    bits: u16,
+) -> Result<()> {
+    use std::time::Instant;
+
+    // Load the sample
+    let (samples, sample_rate) = audio_utils::load_audio(input_path)?;
+
+    // Demo notes for headless mode
+    let demo_notes = vec![
+        hum_analyzer::Note::new(440.0, 0.0, 0.3, 0.8),
+        hum_analyzer::Note::new(523.0, 0.35, 0.3, 0.7),
+        hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
+        hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
+    ];
+
+    // Determine chop count
+    let target_num_chops = num_chops.unwrap_or(16);
+
+    // Trim sample to 10s if longer
+    let max_duration = 10.0;
+    let max_samples = (max_duration * sample_rate as f64) as usize;
+    let sample_to_chop = if samples.len() > max_samples {
+        &samples[..max_samples]
+    } else {
+        &samples[..]
+    };
+
+    let start = Instant::now();
+
+    // Process
+    let chopper = sample_chopper::SampleChopper::new(sample_rate);
+    let chops = chopper.chop(sample_to_chop, target_num_chops)?;
+
+    let mapper = mapper::Mapper::with_config(
+        sample_rate,
+        mapper::MapperConfig {
+            enable_pitch_shift,
+            strength_matching: !pitch_matching,
+            ..Default::default()
+        },
+    );
+
+    let mapped_chops = mapper.process(&demo_notes, &chops)?;
+    let output = mapper.render_output(&mapped_chops);
+
+    // Generate output filename
+    let out_path = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        PathBuf::from(format!("output_chopped_{}.wav", timestamp))
+    });
+
+    // Create WAV options
+    let wav_options = audio_utils::WavOptions::new()
+        .bits_per_sample(bits)
+        .dither(enable_dither);
+
+    audio_utils::write_wav_with_options(&out_path, &output, sample_rate, &wav_options)?;
+
+    let elapsed = start.elapsed();
+    println!("  Processed in {:.2}s", elapsed.as_secs_f64());
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Headless mode (no TUI) for scripting and batch processing
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -590,7 +802,13 @@ fn run_headless(
         hum_analyzer::Note::new(659.0, 0.7, 0.3, 0.9),
         hum_analyzer::Note::new(784.0, 1.05, 0.3, 0.85),
     ];
-    println!("  • Demo notes: {:?}", demo_notes.iter().map(|n| n.to_note_name()).collect::<Vec<_>>());
+    println!(
+        "  • Demo notes: {:?}",
+        demo_notes
+            .iter()
+            .map(|n| n.to_note_name())
+            .collect::<Vec<_>>()
+    );
 
     // Determine chop count
     let target_num_chops = num_chops.unwrap_or(16);
@@ -649,7 +867,11 @@ fn run_headless(
         .dither(enable_dither);
 
     if bits < 32 {
-        println!("  • Output: {}-bit{}", bits, if enable_dither { " + dither" } else { "" });
+        println!(
+            "  • Output: {}-bit{}",
+            bits,
+            if enable_dither { " + dither" } else { "" }
+        );
     }
 
     println!();

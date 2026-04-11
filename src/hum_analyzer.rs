@@ -285,7 +285,6 @@ impl HumAnalyzer {
         let hop_duration = step / self.sample_rate as f64;
 
         let mut notes: Vec<Note> = Vec::new();
-        let _current_note: Option<Note> = None;
 
         for (i, &onset_time) in onsets.iter().enumerate() {
             let next_onset_time = onsets.get(i + 1).copied();
@@ -356,7 +355,6 @@ impl HumAnalyzer {
 
         let mut current_pitch_start = 0;
         let mut current_pitch = 0.0f32;
-        let _current_velocity = 0.0f32;
 
         for (i, &pitch) in pitches.iter().enumerate() {
             let time = i as f64 * hop_duration;
