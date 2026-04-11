@@ -1,6 +1,6 @@
 # HumChop - Development Plan
 
-## Current Status: v0.3.1 (Production Ready)
+## Current Status: v0.1.4 (Development - Quality Issues)
 
 **Completion**: 92%
 
@@ -24,7 +24,7 @@
 | Dithering (TPDF) | v0.1.3 | ✅ Complete |
 | Configurable bit depth | v0.1.3 | ✅ Complete |
 
-### v0.3.1 New Features ✅
+### v0.1.4 New Features ✅
 
 | Feature | Status | Description |
 |---------|--------|-------------|
@@ -47,7 +47,7 @@
 
 ## Version History
 
-### v0.3.1 (Current - 2026-04-11) ✅
+### v0.1.4 (Current - 2026-04-11) ✅
 
 **Milestone**: Production-ready with high-quality audio processing
 

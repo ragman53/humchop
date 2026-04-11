@@ -11,7 +11,7 @@
 - Musicians who want to quickly prototype ideas from samples
 - Anyone who hums melodies to compose
 
-**Current Version**: v0.3.1 (Production Ready - 92% Completion)
+**Current Version**: v0.1.4 (Development - Quality Issues - 60% Completion)
 
 ---
 
@@ -69,7 +69,7 @@ Two matching modes:
 
 - WAV file generation: `output_chopped_{timestamp}.wav`
 - Fade in/out applied to prevent clicks (~5ms)
-- **Smooth crossfade between chops** (enabled by default, v0.3.1)
+- **Smooth crossfade between chops** (enabled by default, v0.1.4)
 - Configurable bit depth: 16, 24, or 32 (default: 32)
 - Optional dithering for lower bit depths
 - Soft-knee compression to prevent harsh clipping (enabled by default)
@@ -84,7 +84,7 @@ Two matching modes:
 | Unsupported format | Display supported formats |
 | WSL2 without PulseAudio | Show setup instructions |
 
-### 2.3 TUI Features (v0.3.1)
+### 2.3 TUI Features (v0.1.4)
 
 | Feature | Description |
 |---------|-------------|
@@ -93,7 +93,7 @@ Two matching modes:
 | **Chop Details** | Show start time, duration, strength for selected chop |
 | **Progress Display** | Show processing stages (Analyzing, Chopping, Mapping) |
 
-### 2.4 Batch Processing (v0.3.1)
+### 2.4 Batch Processing (v0.1.4)
 
 | Option | Description |
 |--------|-------------|
@@ -223,7 +223,7 @@ src/
 | `max_chop_secs` | 2.0 | Maximum chop length |
 | `boundary_jitter_secs` | 0.002 | Random boundary offset (±2ms) |
 
-### MapperConfig (v0.3.1)
+### MapperConfig (v0.1.4)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -249,14 +249,14 @@ src/
 7. Score each chop by integrated energy over its region (60% mean + 40% peak)
 8. Multi-scale energy splitting fallback (tries 5 frame sizes)
 
-### Crossfade Rendering (v0.3.1)
+### Crossfade Rendering (v0.1.4)
 
 When `enable_crossfade` is true, overlapping regions use smooth envelope crossfade:
 - Each chop has fade-in (quick attack) and fade-out (gentle decay)
 - Envelope weights prevent double-volume at overlaps
 - Sine-based (half-Hann) crossfade for smooth transitions
 
-### High-Quality Resampling (v0.3.1)
+### High-Quality Resampling (v0.1.4)
 
 Pitch shifting uses Rubato SincFixedIn for band-limited interpolation:
 - 256-point sinc with BlackmanHarris2 window
@@ -274,7 +274,7 @@ High-velocity notes match strong transient chops:
 
 ## 9. Version History
 
-### v0.3.1 (Current - 2026-04-11)
+### v0.1.4 (Current - 2026-04-11)
 
 **New Features:**
 - `enable_crossfade` configuration for smooth transitions

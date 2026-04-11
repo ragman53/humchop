@@ -1,7 +1,7 @@
 # HumChop - Code Review Findings
 
 ## Review Date: 2026-04-11
-## Version: v0.3.1
+## Version: v0.1.4
 ## Status: 44 tests passing, 0 clippy warnings, build clean, fmt clean
 
 ---

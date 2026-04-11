@@ -228,7 +228,7 @@ let output = mapper.render_output(&mapped);
 
 ## Changelog
 
-### v0.3.1 (Current)
+### v0.1.4 (Current)
 
 #### Crossfade Support
 - **New**: `enable_crossfade` config option (default: true)

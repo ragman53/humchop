@@ -1,6 +1,6 @@
 # HumChop - Implementation Status & TODO
 
-## Current Status: v0.3.1
+## Current Status: v0.1.4
 
 All high and medium priority improvements have been completed. The project is at **92% completion** and production-ready.
 
@@ -44,16 +44,16 @@ All high and medium priority improvements have been completed. The project is at
 - NaN-safe `total_cmp()` sorting
 - Unit tests
 
-### ✅ mapper.rs (v0.3.1 - Enhanced)
+### ✅ mapper.rs (v0.1.4 - Enhanced)
 - Strength-based matching (default JDilla mode)
 - Pitch-based matching (optional)
 - `match_by_strength()` / `match_by_pitch()`
 - `apply_fade()` - Click noise prevention
-- `apply_pitch_shift()` with **SincFixedIn high-quality resampling** (v0.3.1)
+- `apply_pitch_shift()` with **SincFixedIn high-quality resampling** (v0.1.4)
 - `high_quality_resample()` using rubato SincInterpolation
 - `apply_velocity_gain()` - Velocity-based gain
 - `process()` - Full mapping pipeline
-- `render_output()` with **crossfade support** (v0.3.1)
+- `render_output()` with **crossfade support** (v0.1.4)
 - `render_with_crossfade()` - Smooth overlapping regions
 - `soft_knee_compress()` - Soft clipping with cosine knee
 - HumAnalyzer caching for performance
@@ -74,17 +74,17 @@ All high and medium priority improvements have been completed. The project is at
 - Preview with auto-stop
 - Error handling
 
-### ✅ tui.rs (v0.3.1 - Enhanced)
+### ✅ tui.rs (v0.1.4 - Enhanced)
 - State machine: Idle/Loading/Ready/Recording/Processing/Complete/Error
 - Key bindings: `q` quit, `r` record, `m` toggle mode, `1-9` chop preview
 - Layout: Header, Main, Footer
 - Recording level meter
 - Progress display
-- **Chop preview with [1-9] keys** (v0.3.1)
-- **ASCII waveform visualization** with ░▒▓█ blocks (v0.3.1)
+- **Chop preview with [1-9] keys** (v0.1.4)
+- **ASCII waveform visualization** with ░▒▓█ blocks (v0.1.4)
 - **Chop details display** (start time, duration, strength)
 
-### ✅ main.rs (v0.3.1 - Enhanced)
+### ✅ main.rs (v0.1.4 - Enhanced)
 - CLI with clap
 - Options: --pitch-shift, --pitch-matching, -o/--output
 - Demo mode for testing without microphone
@@ -94,7 +94,7 @@ All high and medium priority improvements have been completed. The project is at
 - `--num-chops` for custom chop count
 - `--dither` for triangular noise dithering
 - `--bits` for configurable bit depth
-- **Batch processing** with `--batch` and `--pattern` (v0.3.1)
+- **Batch processing** with `--batch` and `--pattern` (v0.1.4)
 
 ---
 
@@ -112,7 +112,7 @@ All high and medium priority improvements have been completed. The project is at
 
 ## Version History
 
-### v0.3.1 (Current - 2026-04-11) ✅
+### v0.1.4 (Current - 2026-04-11) ✅
 
 **Major Improvements:**
 
@@ -152,7 +152,7 @@ All high and medium priority improvements have been completed. The project is at
 
 ## Implementation Roadmap
 
-### Phase 1: Core Quality ✅ (v0.3.1)
+### Phase 1: Core Quality ⚠️ (v0.1.4 - Known Issues)
 
 | Feature | Status | Version |
 |---------|--------|---------|
@@ -162,17 +162,17 @@ All high and medium priority improvements have been completed. The project is at
 | Multi-band transient detection | ✅ Done | v0.1.2 |
 | MAD normalization | ✅ Done | v0.1.2 |
 | Peak picking with prominence | ✅ Done | v0.1.2 |
-| **Crossfade between chops** | ✅ Done | v0.3.1 |
-| **Rubato Sinc resampling** | ✅ Done | v0.3.1 |
+| **Crossfade between chops** | ⚠️ Needs Work | v0.1.4 |
+| **Rubato Sinc resampling** | ⚠️ Needs Work | v0.1.4 |
 
-### Phase 2: Workflow ✅ (v0.3.1)
+### Phase 2: Workflow ⚠️ (v0.1.4 - Known Issues)
 
 | Feature | Status | Version |
 |---------|--------|---------|
 | Headless CLI mode | ✅ Done | v0.1.3 |
-| **Chop preview in TUI** | ✅ Done | v0.3.1 |
-| **Waveform visualization** | ✅ Done | v0.3.1 |
-| **Batch processing** | ✅ Done | v0.3.1 |
+| **Chop preview in TUI** | ⚠️ Needs Work | v0.1.4 |
+| **Waveform visualization** | ⚠️ Needs Work | v0.1.4 |
+| **Batch processing** | ⚠️ Needs Work | v0.1.4 |
 
 ### Phase 3: Enhanced Features (Future)
 

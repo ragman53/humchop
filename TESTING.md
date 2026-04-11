@@ -74,12 +74,12 @@ cargo run -- test-sample-01.mp3 --no-tui
 **Expected Behavior**:
 - Chops detected at transient points (attacks)
 - Each chop keeps original length
-- **Smooth crossfade** between overlapping regions (v0.3.1)
+- **Smooth crossfade** between overlapping regions (v0.1.4)
 - High-velocity notes → strong transient chops
 
 ---
 
-### 3. Crossfade Test (v0.3.1)
+### 3. Crossfade Test (v0.1.4)
 
 **Purpose**: Verify smooth transitions between overlapping chops.
 
@@ -99,7 +99,7 @@ RUST_LOG=debug cargo run -- test-sample-01.mp3 --no-tui 2>&1 | grep -i crossfade
 
 ---
 
-### 4. Pitch Shift Quality Test (v0.3.1)
+### 4. Pitch Shift Quality Test (v0.1.4)
 
 **Purpose**: Verify high-quality sinc interpolation prevents aliasing.
 
@@ -147,7 +147,7 @@ cargo test test_pitch_detection_sine_wave -- --nocapture
 
 ---
 
-### 7. Batch Processing Test (v0.3.1)
+### 7. Batch Processing Test (v0.1.4)
 
 **Purpose**: Verify batch mode processes multiple files.
 
@@ -173,7 +173,7 @@ ls test_batch_output/
 
 ---
 
-### 8. TUI Chop Preview Test (v0.3.1)
+### 8. TUI Chop Preview Test (v0.1.4)
 
 **Purpose**: Verify chop preview with [1-9] keys.
 
