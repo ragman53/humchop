@@ -310,6 +310,14 @@ fn run_interactive(
     println!("  • Recorded {:.2} seconds", recording_duration);
     println!("  • {} samples collected", hum_samples.len());
 
+    // DEBUG: Save the raw hum recording for manual testing
+    let hum_wav_path = std::path::Path::new("debug_hum_recording.wav");
+    if let Err(e) = audio_utils::write_wav(hum_wav_path, &hum_samples, sample_rate) {
+        println!("  ⚠️  Failed to save hum recording for debug: {}", e);
+    } else {
+        println!("  💾 Saved hum recording to: {}", hum_wav_path.display());
+    }
+
     // Check if we have enough audio
     if hum_samples.len() < sample_rate as usize / 10 {
         println!();
@@ -396,6 +404,15 @@ fn run_interactive(
 
     println!("  • Found {} natural chop points", chops.len());
 
+    // DEBUG: Save individual chops for manual inspection
+    for (i, chop) in chops.iter().enumerate() {
+        let chop_path = PathBuf::from(format!("debug_chop_{:02}.wav", i));
+        if let Err(e) = audio_utils::write_wav(&chop_path, &chop.samples, sample_rate) {
+            println!("  ⚠️  Failed to save chop {}: {}", i, e);
+        }
+    }
+    println!("  💾 Saved {} chops to debug_chop_XX.wav", chops.len());
+
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
@@ -415,6 +432,14 @@ fn run_interactive(
         .process(&notes, &chops)
         .map_err(|e| anyhow::anyhow!("Failed to map: {}", e))?;
 
+    // DEBUG: Save mapped chops for manual inspection
+    for (i, mc) in mapped_chops.iter().enumerate() {
+        let mc_path = PathBuf::from(format!("debug_mapped_{:02}.wav", i));
+        if let Err(e) = audio_utils::write_wav(&mc_path, &mc.samples, sample_rate) {
+            println!("  ⚠️  Failed to save mapped chop {}: {}", i, e);
+        }
+    }
+    println!("  💾 Saved {} mapped chops to debug_mapped_XX.wav", mapped_chops.len());
     let output = mapper.render_output(&mapped_chops);
 
     // Generate output filename
