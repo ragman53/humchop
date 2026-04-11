@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 use crate::audio_utils::{self, DEFAULT_SAMPLE_RATE};
+use crate::constants::MAX_RECORDING_DURATION_SECS;
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
 use crate::mapper::{Mapper, MapperConfig};
@@ -40,7 +41,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
 
 /// Maximum recording duration in seconds.
-const MAX_RECORDING_DURATION_SECS: f64 = 15.0;
 
 /// Application state.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -348,7 +348,11 @@ impl App {
 
     /// Toggle pitch matching mode.
     pub fn toggle_pitch_matching(&mut self) {
-        self.mapper_config.strength_matching = !self.mapper_config.strength_matching;
+        self.mapper_config.match_config.mode = if self.mapper_config.match_config.is_strength() {
+            crate::mapper::MatchMode::Pitch
+        } else {
+            crate::mapper::MatchMode::Strength
+        };
     }
 }
 
@@ -483,7 +487,7 @@ fn render_ready_content(frame: &mut Frame, area: Rect, app: &App) {
         "No sample data".to_string()
     };
 
-    let matching_mode = if app.mapper_config.strength_matching {
+    let matching_mode = if app.mapper_config.match_config.is_strength() {
         "Strength (JDilla)"
     } else {
         "Pitch"
@@ -540,8 +544,9 @@ fn render_recording_content(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or(0.0);
 
     let level_bar = format!(
-        "{:.1}s / 15.0s [{}]",
-        elapsed.min(15.0),
+        "{:.1}s / {:.1}s [{}]",
+        elapsed.min(MAX_RECORDING_DURATION_SECS),
+        MAX_RECORDING_DURATION_SECS,
         "#".repeat((elapsed as usize).min(30))
     );
 
@@ -667,13 +672,29 @@ fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
+    // MINOR-4 fix: split into two non-overlapping areas (prevents notes_widget overlap)
+    // Top ~60% for notes list, bottom ~40% for output/chop info
+    let (notes_area, info_area) = {
+        let total_height = area.height;
+        let notes_height = total_height.saturating_sub(10).max(3);
+        let info_height = total_height.saturating_sub(notes_height);
+        let notes_rect = Rect::new(area.x, area.y, area.width, notes_height);
+        let info_rect = Rect::new(
+            area.x,
+            area.y + notes_height,
+            area.width,
+            info_height.max(3),
+        );
+        (notes_rect, info_rect)
+    };
+
     let notes_widget = List::new(notes_list).block(
         Block::default()
             .title(format!("Detected Notes ({})", notes_str))
             .borders(Borders::ALL),
     );
 
-    frame.render_widget(notes_widget, area);
+    frame.render_widget(notes_widget, notes_area);
 
     // Show chops info with preview
     let chops_info = if let Some(ref chops) = app.chops {
@@ -689,7 +710,7 @@ fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
             let chop = &chops[idx];
             let waveform = generate_waveform_preview(&chop.samples, 40);
             format!(
-                "Chop {}: {:.2}s - {:.2}s (strength: {:.2})\n  {}",
+                "Chop {}: {:.2}s - {:.2}s (strength: {:.2})  {}",
                 idx + 1,
                 chop.start_time,
                 chop.start_time + chop.duration,
@@ -707,24 +728,13 @@ fn render_complete_content(frame: &mut Frame, area: Rect, app: &App) {
     let text = vec![
         Line::from(vec![
             Span::styled("✓ ", Style::default().fg(Color::Green)),
-            Span::raw("Output saved: "),
+            Span::raw("Output: "),
             Span::raw(&output_str),
         ]),
-        Line::from(""),
         Line::from(format!("Chops: {}", chops_info)),
-        Line::from(""),
         Line::from(chop_preview),
-        Line::from(""),
-        Line::from("Press [1-9] to preview chops | 'r' to start over | 'q' to quit"),
     ];
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: true });
-
-    let info_area = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(5),
-        area.width,
-        5,
-    );
     frame.render_widget(paragraph, info_area);
 }
 
@@ -757,7 +767,7 @@ fn render_error_content(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Render footer with status and controls.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let matching_mode = if app.mapper_config.strength_matching {
+    let matching_mode = if app.mapper_config.match_config.is_strength() {
         "Strength"
     } else {
         "Pitch"
@@ -814,7 +824,7 @@ pub fn run_tui(mut app: App) -> io::Result<()> {
                 let elapsed = start.elapsed().as_secs_f64();
 
                 // Auto-stop at 15 seconds
-                if elapsed >= 15.0 {
+                if elapsed >= MAX_RECORDING_DURATION_SECS {
                     app.stop_recording();
                 }
             }

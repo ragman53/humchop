@@ -6,6 +6,7 @@
 //! - Velocity-based gain adjustment
 //! - JDilla-style: chops keep original length, play at note positions
 
+use crate::constants::{DEFAULT_CROSSFADE_SAMPLES, FADE_MS, MIN_CROSSFADE_SAMPLES};
 use crate::error::HumChopError;
 use crate::hum_analyzer::{HumAnalyzer, Note};
 use crate::sample_chopper::{Chop, SampleChopper};
@@ -13,45 +14,79 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 
+// Constants are shared via the constants module
 // ─────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────
 
-/// Configuration for the mapper.
+/// How to match notes to chops.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct MapperConfig {
-    /// Enable pitch shifting (can be computationally expensive)
-    pub enable_pitch_shift: bool,
-    /// Output sample rate
-    pub output_sample_rate: u32,
-    /// Crossfade length in samples for smooth transitions
-    pub crossfade_samples: usize,
-    /// JDilla-style: match by strength (transient) rather than pitch
-    pub strength_matching: bool,
-    /// Enable soft-knee compression to prevent clipping
-    pub soft_clip: bool,
-    /// Soft clip threshold (in dB, e.g., -1.0 = -1dBFS). Only used if soft_clip is true.
-    pub soft_clip_threshold_db: f32,
-    /// Enable crossfade between chops (smooth overlap instead of gaps)
-    pub enable_crossfade: bool,
+pub enum MatchMode {
+    /// Match by strength: loud notes → strong transient chops (JDilla style)
+    Strength,
+    /// Match by pitch proximity: notes select chops with similar pitch
+    Pitch,
 }
 
-impl Default for MapperConfig {
+impl Default for MatchMode {
+    fn default() -> Self {
+        Self::Strength
+    }
+}
+
+/// Configuration for note-to-chop matching.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MatchConfig {
+    /// How to match notes to chops
+    pub mode: MatchMode,
+    /// Enable pitch shifting (retunes chop to note pitch, can be expensive)
+    pub enable_pitch_shift: bool,
+}
+
+impl Default for MatchConfig {
     fn default() -> Self {
         Self {
+            mode: MatchMode::Strength,
             enable_pitch_shift: false,
-            output_sample_rate: 44100,
-            crossfade_samples: 256,
-            strength_matching: true,      // JDilla style - match by strength
-            soft_clip: true,              // Enable soft clipping by default
-            soft_clip_threshold_db: -1.0, // -1dBFS threshold
-            enable_crossfade: true,       // Enable smooth crossfade by default
         }
     }
 }
 
-impl MapperConfig {
+impl MatchConfig {
+    /// Returns true if strength matching is enabled.
+    pub fn is_strength(&self) -> bool {
+        matches!(self.mode, MatchMode::Strength)
+    }
+}
+
+/// Configuration for output rendering.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RenderConfig {
+    /// Crossfade length in samples for smooth transitions between chops
+    pub crossfade_samples: usize, // MINOR-3: default from DEFAULT_CROSSFADE_SAMPLES
+    /// Enable crossfade between chops (smooth overlap instead of gaps)
+    pub enable_crossfade: bool,
+    /// Enable soft-knee compression to prevent clipping
+    pub soft_clip: bool,
+    /// Soft clip threshold in dB (e.g., -1.0 = -1dBFS). Only used if soft_clip is true.
+    pub soft_clip_threshold_db: f32,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            crossfade_samples: DEFAULT_CROSSFADE_SAMPLES,
+            enable_crossfade: true,
+            soft_clip: true,
+            soft_clip_threshold_db: -1.0,
+        }
+    }
+}
+
+impl RenderConfig {
     /// Enable/disable soft-knee compression (prevents harsh clipping).
     #[allow(dead_code)]
     pub fn with_soft_clip(mut self, enabled: bool) -> Self {
@@ -63,6 +98,45 @@ impl MapperConfig {
     #[allow(dead_code)]
     pub fn with_soft_clip_threshold(mut self, db: f32) -> Self {
         self.soft_clip_threshold_db = db.clamp(-12.0, 0.0);
+        self
+    }
+}
+
+/// Full configuration for the mapper (combines matching + rendering).
+/// DESIGN-3 fix: separated into MatchConfig (what to play) and RenderConfig (how to render).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MapperConfig {
+    /// Matching configuration
+    pub match_config: MatchConfig,
+    /// Rendering configuration
+    pub render_config: RenderConfig,
+    /// Output sample rate
+    pub output_sample_rate: u32,
+}
+
+impl Default for MapperConfig {
+    fn default() -> Self {
+        Self {
+            match_config: MatchConfig::default(),
+            render_config: RenderConfig::default(),
+            output_sample_rate: 44100,
+        }
+    }
+}
+
+impl MapperConfig {
+    /// Enable/disable soft-knee compression (prevents harsh clipping).
+    #[allow(dead_code)]
+    pub fn with_soft_clip(mut self, enabled: bool) -> Self {
+        self.render_config.soft_clip = enabled;
+        self
+    }
+
+    /// Set soft clip threshold in dB (e.g., -1.0 = -1dBFS).
+    #[allow(dead_code)]
+    pub fn with_soft_clip_threshold(mut self, db: f32) -> Self {
+        self.render_config.soft_clip_threshold_db = db.clamp(-12.0, 0.0);
         self
     }
 }
@@ -211,7 +285,7 @@ impl Mapper {
     /// Enable or disable pitch shifting.
     #[allow(dead_code)]
     pub fn with_pitch_shift(mut self, enabled: bool) -> Self {
-        self.config.enable_pitch_shift = enabled;
+        self.config.match_config.enable_pitch_shift = enabled;
         self
     }
 
@@ -220,7 +294,11 @@ impl Mapper {
     /// When false, matches by pitch proximity.
     #[allow(dead_code)]
     pub fn with_strength_matching(mut self, enabled: bool) -> Self {
-        self.config.strength_matching = enabled;
+        self.config.match_config.mode = if enabled {
+            MatchMode::Strength
+        } else {
+            MatchMode::Pitch
+        };
         self
     }
 
@@ -309,7 +387,7 @@ impl Mapper {
                 pool
             };
 
-            let chosen = if self.config.strength_matching {
+            let chosen = if self.config.match_config.is_strength() {
                 self.match_by_strength(note, chops, &pool)
             } else {
                 self.match_by_pitch(note, chops, &chop_pitches, &pool)
@@ -356,7 +434,7 @@ impl Mapper {
     /// The output must match the original chop length for proper sequencing.
     /// This is a trade-off between quality and consistent chop durations.
     pub fn apply_pitch_shift(&self, chop: &Chop, semitones: i32) -> Vec<f32> {
-        if !self.config.enable_pitch_shift || semitones == 0 {
+        if !self.config.match_config.enable_pitch_shift || semitones == 0 {
             return chop.samples.clone();
         }
 
@@ -474,16 +552,19 @@ impl Mapper {
     /// Process a single note-to-chop mapping.
     /// In JDilla mode: chops keep their original length, velocity is applied.
     ///
-    /// Duration mode: chops can be trimmed to note duration, looped to fill note,
-    /// or played at full length (classic JDilla behavior).
+    /// DESIGN-2 fix: when pitch_matching is on but enable_pitch_shift is not,
+    /// pitch shift is applied automatically so selected chops play at the correct pitch.
     pub fn process_mapping(&self, note: &Note, chop: &Chop, output_onset: f64) -> MappedChop {
         // JDilla style: chops keep original length (no time stretch)
-        // NOTE: We apply velocity gain only; full chop length is preserved.
-        // For trimmed-to-note behavior, use process_mapping_trimmed() instead.
         let mut samples = chop.samples.clone();
 
-        // Pitch shift if enabled
-        if self.config.enable_pitch_shift {
+        // Pitch shift:
+        // - Explicitly enabled via config.enable_pitch_shift, OR
+        // - Implicitly when pitch_matching is on (DESIGN-2 fix)
+        let do_pitch_shift = self.config.match_config.enable_pitch_shift
+            || (!self.config.match_config.is_strength() && note.pitch_hz > 0.0);
+
+        if do_pitch_shift {
             let chop_pitch = self.estimate_chop_pitch(chop);
             if chop_pitch > 0.0 && note.pitch_hz > 0.0 {
                 let semitones = self.pitch_diff_semitones(chop_pitch, note.pitch_hz);
@@ -497,8 +578,7 @@ impl Mapper {
         self.apply_velocity_gain(&mut samples, note.velocity);
 
         // Apply fade to prevent click noise at boundaries
-        // Fade length: ~5ms at 44100Hz = ~220 samples
-        let fade_samples = (self.sample_rate as f64 * 0.005) as usize;
+        let fade_samples = (FADE_MS * 0.001 * self.sample_rate as f64) as usize;
         Self::apply_fade(&mut samples, fade_samples);
 
         let output_duration = samples.len() as f64 / self.sample_rate as f64;
@@ -518,32 +598,14 @@ impl Mapper {
         output_onset: f64,
     ) -> MappedChop {
         let target_samples = (note.duration_sec * self.sample_rate as f64) as usize;
-
-        // Clone and apply pitch shift BEFORE trimming (keeps analysis pristine)
-        let mut samples = if self.config.enable_pitch_shift {
-            let chop_pitch = self.estimate_chop_pitch(chop);
-            if chop_pitch > 0.0 && note.pitch_hz > 0.0 {
-                let semitones = self.pitch_diff_semitones(chop_pitch, note.pitch_hz);
-                if semitones != 0 {
-                    chop.samples.clone() // pitch shift applied below
-                } else {
-                    chop.samples.clone()
-                }
-            } else {
-                chop.samples.clone()
-            }
-        } else {
-            chop.samples.clone()
-        };
+        let mut samples = chop.samples.clone();
 
         // Apply pitch shift if enabled (on full chop, then trim)
-        if self.config.enable_pitch_shift {
+        if self.config.match_config.enable_pitch_shift {
             let chop_pitch = self.estimate_chop_pitch(chop);
             if chop_pitch > 0.0 && note.pitch_hz > 0.0 {
                 let semitones = self.pitch_diff_semitones(chop_pitch, note.pitch_hz);
                 if semitones != 0 {
-                    // Pitch shift to match note pitch
-                    // For trimmed mode, shift directly to target length
                     let shifted =
                         self.apply_pitch_shift_raw(&chop.samples, note.pitch_hz / chop_pitch);
                     samples = shifted;
@@ -697,14 +759,16 @@ impl Mapper {
 
         // For crossfade mode, we need to process overlaps
         // For non-crossfade mode, simple placement with gaps
-        if self.config.enable_crossfade && mapped_chops.len() > 1 {
+        if self.config.render_config.enable_crossfade && mapped_chops.len() > 1 {
             self.render_with_crossfade(mapped_chops)
         } else {
             self.render_simple(mapped_chops)
         }
     }
 
-    /// Simple rendering without crossfade (original behavior with gaps).
+    /// Simple rendering without crossfade.
+    /// DESIGN-4 fix: gaps between notes are preserved (chops placed at note.onset_sec
+    /// with silence in between) so staccato hums produce gaps, not just 5ms clicks.
     fn render_simple(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
         let total_samples = mapped_chops
             .iter()
@@ -725,8 +789,8 @@ impl Mapper {
         }
 
         // Apply soft clipping or hard normalization
-        if self.config.soft_clip {
-            output = soft_knee_compress(&output, self.config.soft_clip_threshold_db);
+        if self.config.render_config.soft_clip {
+            output = soft_knee_compress(&output, self.config.render_config.soft_clip_threshold_db);
         } else {
             let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
             if max_amp > 1.0 {
@@ -747,7 +811,11 @@ impl Mapper {
     /// ramp up at the head and ramp down at the tail.
     /// BUG-4 fix: overlap detection is removed (dead code, was never used).
     fn render_with_crossfade(&self, mapped_chops: &[MappedChop]) -> Vec<f32> {
-        let crossfade_samples = self.config.crossfade_samples.min(1024).max(1);
+        let crossfade_samples = self
+            .config
+            .render_config
+            .crossfade_samples
+            .clamp(MIN_CROSSFADE_SAMPLES, 1024);
         let sample_rate = self.sample_rate as f64;
 
         // Calculate total output length including overlaps
@@ -807,8 +875,8 @@ impl Mapper {
         }
 
         // Apply soft clipping or hard normalization
-        if self.config.soft_clip {
-            output = soft_knee_compress(&output, self.config.soft_clip_threshold_db);
+        if self.config.render_config.soft_clip {
+            output = soft_knee_compress(&output, self.config.render_config.soft_clip_threshold_db);
         } else {
             let max_amp = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
             if max_amp > 1.0 {
@@ -900,8 +968,8 @@ mod tests {
             .with_pitch_shift(true)
             .with_strength_matching(true);
 
-        assert!(mapper.config.enable_pitch_shift);
-        assert!(mapper.config.strength_matching);
+        assert!(mapper.config.match_config.enable_pitch_shift);
+        assert!(mapper.config.match_config.is_strength());
     }
 
     #[allow(clippy::unwrap_used)]

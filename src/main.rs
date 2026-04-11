@@ -3,6 +3,8 @@
 //! Chop audio samples by humming melodies.
 //! Record a hum → Analyze pitch → Auto-chop your samples using JDilla-style processing.
 
+mod constants;
+use crate::constants::{MAX_DEMO_DURATION_SECS, MAX_RECORDING_DURATION_SECS};
 mod audio_utils;
 mod error;
 mod hum_analyzer;
@@ -217,7 +219,7 @@ fn run_interactive(
 
     // Start recording
     let recording_start = Instant::now();
-    let max_duration = Duration::from_secs_f64(15.0);
+    let max_duration = Duration::from_secs_f64(MAX_RECORDING_DURATION_SECS);
 
     let tokio_receiver = match recorder.start_recording() {
         Ok(rx) => rx,
@@ -282,7 +284,7 @@ fn run_interactive(
 
         // Print elapsed time
         let elapsed = recording_start.elapsed().as_secs_f64();
-        print!("\r🔴 {:.1}s / 15.0s ", elapsed.min(15.0));
+        print!("\r🔴 {:.1}s / {:.1}s ", elapsed.min(MAX_RECORDING_DURATION_SECS), MAX_RECORDING_DURATION_SECS);
         io::stdout().flush().ok();
     }
 
@@ -397,8 +399,14 @@ fn run_interactive(
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
-            enable_pitch_shift,
-            strength_matching: !pitch_matching,
+            match_config: crate::mapper::MatchConfig {
+                mode: if pitch_matching {
+                    crate::mapper::MatchMode::Pitch
+                } else {
+                    crate::mapper::MatchMode::Strength
+                },
+                enable_pitch_shift,
+            },
             ..Default::default()
         },
     );
@@ -485,7 +493,7 @@ fn run_interactive(
     println!();
     println!("→ Generating demo output (using first 10s of sample)...");
 
-    let demo_duration = 10.0;
+    let demo_duration = MAX_DEMO_DURATION_SECS;
     let demo_samples = (demo_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > demo_samples {
         println!(
@@ -516,8 +524,14 @@ fn run_interactive(
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
-            enable_pitch_shift,
-            strength_matching: !pitch_matching,
+            match_config: crate::mapper::MatchConfig {
+                mode: if pitch_matching {
+                    crate::mapper::MatchMode::Pitch
+                } else {
+                    crate::mapper::MatchMode::Strength
+                },
+                enable_pitch_shift,
+            },
             ..Default::default()
         },
     );
@@ -686,7 +700,7 @@ fn process_single_file(
     let (samples, sample_rate) = audio_utils::load_audio(input_path)?;
 
     // Demo notes for headless mode
-    let max_duration = 10.0;
+    let max_duration = MAX_DEMO_DURATION_SECS;
     let max_samples = (max_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > max_samples {
         &samples[..max_samples]
@@ -706,8 +720,14 @@ fn process_single_file(
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
-            enable_pitch_shift,
-            strength_matching: !pitch_matching,
+            match_config: crate::mapper::MatchConfig {
+                mode: if pitch_matching {
+                    crate::mapper::MatchMode::Pitch
+                } else {
+                    crate::mapper::MatchMode::Strength
+                },
+                enable_pitch_shift,
+            },
             ..Default::default()
         },
     );
@@ -762,6 +782,8 @@ fn generate_demo_notes(num_notes: usize, duration_secs: f64) -> Vec<hum_analyzer
         .collect()
 }
 
+// Constants are in the shared constants module
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Headless mode (no TUI) for scripting and batch processing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -803,7 +825,7 @@ fn run_headless(
     );
 
     // Demo notes for headless mode
-    let max_duration = 10.0;
+    let max_duration = MAX_DEMO_DURATION_SECS;
     let target_num_chops = num_chops.unwrap_or(16);
     // BUG-5 fix: demo notes scale to match sample duration + target chop count
     let demo_notes = generate_demo_notes(target_num_chops, max_duration);
@@ -817,7 +839,7 @@ fn run_headless(
     let start = Instant::now();
 
     // Trim sample to 10s if longer
-    let max_duration = 10.0;
+    let max_duration = MAX_DEMO_DURATION_SECS;
     let max_samples = (max_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > max_samples {
         println!(
@@ -842,8 +864,14 @@ fn run_headless(
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
-            enable_pitch_shift,
-            strength_matching: !pitch_matching,
+            match_config: crate::mapper::MatchConfig {
+                mode: if pitch_matching {
+                    crate::mapper::MatchMode::Pitch
+                } else {
+                    crate::mapper::MatchMode::Strength
+                },
+                enable_pitch_shift,
+            },
             ..Default::default()
         },
     );
@@ -904,7 +932,7 @@ fn run_demo_mode(
     println!();
     println!("→ Generating demo output (using first 10s of sample)...");
 
-    let demo_duration = 10.0;
+    let demo_duration = MAX_DEMO_DURATION_SECS;
     let demo_notes = generate_demo_notes(4, demo_duration);
     println!(
         "  • Demo notes ({})",
@@ -912,7 +940,7 @@ fn run_demo_mode(
     );
 
     // For demo, trim to 10 seconds and use 16 chops
-    let demo_duration = 10.0;
+    let demo_duration = MAX_DEMO_DURATION_SECS;
     let demo_samples = (demo_duration * sample_rate as f64) as usize;
     let sample_to_chop = if samples.len() > demo_samples {
         println!(
@@ -937,8 +965,14 @@ fn run_demo_mode(
     let mapper = mapper::Mapper::with_config(
         sample_rate,
         mapper::MapperConfig {
-            enable_pitch_shift,
-            strength_matching: !pitch_matching,
+            match_config: crate::mapper::MatchConfig {
+                mode: if pitch_matching {
+                    crate::mapper::MatchMode::Pitch
+                } else {
+                    crate::mapper::MatchMode::Strength
+                },
+                enable_pitch_shift,
+            },
             ..Default::default()
         },
     );
